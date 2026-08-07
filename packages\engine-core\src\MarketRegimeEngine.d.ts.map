@@ -1,1 +1,0 @@
-{"version":3,"file":"MarketRegimeEngine.d.ts","sourceRoot":"","sources":["MarketRegimeEngine.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,WAAW,EAAE,iBAAiB,EAAoB,MAAM,gBAAgB,CAAC;AAElF;;;;GAIG;AACH,qBAAa,kBAAkB;IAE7B;;;;;OAKG;IACI,sBAAsB,CAAC,MAAM,EAAE,MAAM,EAAE,GAAG,MAAM;IA6CvD;;OAEG;IACI,QAAQ,CAAC,OAAO,EAAE,WAAW,EAAE,EAAE,QAAQ,GAAE,MAAW,GAAG,iBAAiB;CAmDlF"}

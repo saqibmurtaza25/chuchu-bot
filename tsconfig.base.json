@@ -6,8 +6,8 @@
     "lib": ["ES2022", "DOM"],
     "baseUrl": ".",
     "paths": {
-      "@athena/shared": ["packages/shared/src/index.ts"],
-      "@athena/engine-core": ["packages/engine-core/src/index.ts"]
+      "@chuchu/shared": ["packages/shared/src/index.ts"],
+      "@chuchu/engine-core": ["packages/engine-core/src/index.ts"]
     },
     "declaration": true,
     "declarationMap": true,

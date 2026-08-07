@@ -1,1 +1,0 @@
-{"version":3,"file":"AnalyticsEngine.d.ts","sourceRoot":"","sources":["AnalyticsEngine.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,gBAAgB,EAAE,UAAU,EAAE,MAAM,gBAAgB,CAAC;AAE9D;;;;GAIG;AACH,qBAAa,eAAe;IAE1B;;OAEG;IACI,QAAQ,CAAC,MAAM,EAAE,UAAU,EAAE,EAAE,cAAc,GAAE,MAAgB,GAAG,gBAAgB;CAyF1F"}

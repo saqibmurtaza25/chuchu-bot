@@ -1,8 +1,8 @@
 {
-  "name": "athena-ai-v2",
+  "name": "chuchu-bot",
   "version": "2.0.0",
   "private": true,
-  "description": "ATHENA AI v2 - Institutional-grade Real-time AI Crypto Intelligence & Trading Platform",
+  "description": "CHUCHU BOT v2 - Institutional-grade Real-time AI Crypto Intelligence & Trading Platform",
   "scripts": {
     "build": "pnpm --recursive run build",
     "dev": "pnpm --parallel --filter ./packages/* run dev",
