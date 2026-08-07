@@ -1,0 +1,26 @@
+{
+  "name": "@athena/backend",
+  "version": "2.0.0",
+  "main": "./dist/backend/src/index.js",
+  "scripts": {
+    "build": "npx tsc --project tsconfig.json",
+    "dev": "npx tsc --project tsconfig.json --watch",
+    "start": "node start-server.js"
+  },
+  "dependencies": {
+    "@athena/shared": "file:../shared",
+    "@athena/engine-core": "file:../engine-core",
+    "axios": "^1.6.8",
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5",
+    "ws": "^8.16.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.24",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3"
+  }
+}
