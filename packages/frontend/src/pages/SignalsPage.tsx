@@ -1,7 +1,7 @@
 import React from 'react';
 import { TrendingUp, ShieldAlert, Zap, ArrowUpRight, ArrowDownRight, Layers, ScanSearch } from 'lucide-react';
 import { useChuchuStore } from '../store/useChuchuStore';
-import { formatPrice, formatLatencyDelay } from '../utils/formatting';
+import { formatPrice, formatLatencyDelay, formatUsdCompact } from '../utils/formatting';
 
 export const SignalsPage: React.FC = () => {
   const { states, setSelectedSymbol, setActivePage, submitOrder } = useChuchuStore();
@@ -120,9 +120,7 @@ export const SignalsPage: React.FC = () => {
                   <div className="p-1.5 bg-slate-900/90 rounded border border-slate-700/60 col-span-2">
                     <div className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider mb-0.5">CVD Delta</div>
                     <div className={`font-extrabold text-sm ${(state.microstructure?.cvd || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {(state.microstructure?.cvd || 0) >= 0 
-                        ? `+$${((state.microstructure?.cvd || 0) / 1_000_000).toFixed(1)}M` 
-                        : `-$${Math.abs((state.microstructure?.cvd || 0) / 1_000_000).toFixed(1)}M`}
+                      {formatUsdCompact(state.microstructure?.cvd || 0)}
                     </div>
                   </div>
                   <div className="p-1.5 bg-slate-900/90 rounded border border-slate-700/60">

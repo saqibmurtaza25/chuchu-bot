@@ -71,10 +71,173 @@ export class MarketDataEngine {
   public priorityQueueEngine = new PriorityQueueEngine();
 
   public restManager: RESTManager;
-  public wsManager: WebSocketManager | null = null;
+  public wsManager: WebSocketManager | null = null; // futures depth
+  public spotWs: WebSocketManager | null = null;   // spot trades + klines
   private pollIntervalTimer: NodeJS.Timeout | null = null;
   private discoveryTimer: NodeJS.Timeout | null = null;
   private isPollingDerivatives = false;
+
+  // ─────────────────────────────────────────────────────────────
+  // Caching to slash Binance REST usage (prevents 429 / IP throttle)
+  // MTF RSI & W%R change slowly — cache 60s instead of refetching
+  // every discovery cycle. Same for the 15m RSI pre-filter.
+  // ─────────────────────────────────────────────────────────────
+  private static readonly MTF_CACHE_TTL_MS = 60000;
+  private static readonly RSI15M_CACHE_TTL_MS = 60000;
+  private mtfCache = new Map<string, { rsi: any; wr: any; ts: number }>();
+  private rsi15mCache = new Map<string, { rsi: number; ts: number }>();
+  private lastIndCalcAt = new Map<string, number>();
+  private static readonly IND_CALC_THROTTLE_MS = 500;
+
+  // Live MTF kline history fed by WebSocket kline streams (1m/5m/15m/1h/4h/12h).
+  // RSI & W%R(200) are recomputed on every kline message (~1-2s) — no REST, no IP ban.
+  private mtfKlineHistory = new Map<string, Map<string, CandleOHLCV[]>>();
+  private static readonly MTF_MAX_CANDLES = 250;
+  private static readonly MTF_TF_MAP: Record<string, string> = {
+    '1m': 'tf1m',
+    '5m': 'tf5m',
+    '15m': 'tf15m',
+    '1h': 'tf1h',
+    '4h': 'tf4h',
+    '12h': 'tf12h'
+  };
+  private mtfBackfillInFlight = new Set<string>();
+
+  private async getMtfData(symbol: string): Promise<{ rsi: any; wr: any } | null> {
+    const cached = this.mtfCache.get(symbol);
+    if (cached && Date.now() - cached.ts < MarketDataEngine.MTF_CACHE_TTL_MS) {
+      return { rsi: cached.rsi, wr: cached.wr };
+    }
+    const [rsi, wr] = await Promise.all([
+      this.restManager.getMultiTimeframeRSIs(symbol),
+      this.restManager.getMultiTimeframeWilliamsR(symbol)
+    ]);
+    if (rsi || wr) {
+      this.mtfCache.set(symbol, { rsi, wr, ts: Date.now() });
+    }
+    return { rsi, wr };
+  }
+
+  private getCachedRsi15m(symbol: string, fetched: number | null): number | undefined {
+    const cached = this.rsi15mCache.get(symbol);
+    if (cached && Date.now() - cached.ts < MarketDataEngine.RSI15M_CACHE_TTL_MS) {
+      return cached.rsi;
+    }
+    if (fetched !== null && fetched !== undefined) {
+      this.rsi15mCache.set(symbol, { rsi: fetched, ts: Date.now() });
+      return fetched;
+    }
+    return undefined;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Live MTF RSI / W%R(200) via WebSocket kline streams
+  // REST is used only ONCE to seed history; after that WS klines
+  // (arriving every ~1-2s even mid-candle) keep RSI/W%R live per-second.
+  // ─────────────────────────────────────────────────────────────
+  private async ensureMtfHistory(symbol: string, tf: string): Promise<void> {
+    const key = `${symbol}|${tf}`;
+    if (this.mtfBackfillInFlight.has(key)) return;
+    const existing = this.mtfKlineHistory.get(symbol)?.get(tf);
+    if (existing && existing.length >= 20) return;
+
+    this.mtfBackfillInFlight.add(key);
+    try {
+      const klines = await this.restManager.getKlines(symbol, tf, 250);
+      if (klines.length > 0) {
+        let tfMap = this.mtfKlineHistory.get(symbol);
+        if (!tfMap) {
+          tfMap = new Map();
+          this.mtfKlineHistory.set(symbol, tfMap);
+        }
+        tfMap.set(tf, klines);
+      }
+    } catch (e) {
+      // ignore — WS will keep whatever candles arrive
+    } finally {
+      this.mtfBackfillInFlight.delete(key);
+    }
+  }
+
+  public async seedMtfHistories(symbols: string[]): Promise<void> {
+    const tfs = ['5m', '15m', '1h', '4h', '12h'];
+    for (const sym of symbols) {
+      await Promise.all(tfs.map(tf => this.ensureMtfHistory(sym, tf)));
+      await new Promise(resolve => setTimeout(resolve, 40)); // pace REST calls
+    }
+  }
+
+  private updateMtfFromKline(kline: CandleOHLCV): void {
+    const tfKey = MarketDataEngine.MTF_TF_MAP[kline.interval];
+    if (!tfKey) return;
+
+    let tfMap = this.mtfKlineHistory.get(kline.symbol);
+    if (!tfMap) {
+      tfMap = new Map();
+      this.mtfKlineHistory.set(kline.symbol, tfMap);
+    }
+    let hist = tfMap.get(kline.interval);
+    if (!hist) {
+      hist = [];
+      tfMap.set(kline.interval, hist);
+    }
+    if (hist.length > 0 && hist[hist.length - 1].openTime === kline.openTime) {
+      hist[hist.length - 1] = kline;
+    } else {
+      hist.push(kline);
+      if (hist.length > MarketDataEngine.MTF_MAX_CANDLES) hist.shift();
+    }
+    if (hist.length < 15) return;
+
+    const state = this.symbolStates.get(kline.symbol);
+    if (!state) return;
+    if (!state.indicators) {
+      state.indicators = {
+        symbol: kline.symbol, ema20: 0, ema50: 0, ema200: 0, rsi14: 50,
+        rsiMultiTimeframe: { tf5m: 50, tf15m: 50, tf1h: 50, tf4h: 50, tf12h: 50 },
+        williamsR14: 50, williamsR200: 50,
+        williamsRMultiTimeframe: { tf1m: 50, tf5m: 50, tf15m: 50, tf1h: 50, tf4h: 50 },
+        macd: { macdLine: 0, signalLine: 0, histogram: 0 },
+        vwap: 0, microVwap: 0, atr14: 0,
+        vpvr: { pocPrice: 0, highVolumeNodes: [], lowVolumeNodes: [] },
+        bollingerBands: { upper: 0, middle: 0, lower: 0 },
+        supertrend: { value: 0, direction: 'BULL' },
+        stochRsi: { k: 50, d: 50 },
+        adx14: { adx: 25, plusDI: 20, minusDI: 20 },
+        timestamp: Date.now()
+      };
+    }
+
+    const closes = hist.map(c => c.close);
+    const rsiArr = this.indicatorEngine.calculateRSI(closes, 14);
+    const rsiVal = rsiArr[rsiArr.length - 1];
+    if (rsiVal !== undefined && isFinite(rsiVal)) {
+      const mtf = state.indicators.rsiMultiTimeframe || { tf5m: 50, tf15m: 50, tf1h: 50, tf4h: 50, tf12h: 50 };
+      (mtf as any)[tfKey] = parseFloat(rsiVal.toFixed(1));
+      state.indicators.rsiMultiTimeframe = mtf;
+    }
+
+    // W%R(200) has no 12h bucket — 12h updates RSI only
+    if (kline.interval !== '12h') {
+      const wrArr = this.indicatorEngine.calculateWilliamsR(hist, 200);
+      const wrVal = wrArr[wrArr.length - 1];
+      if (wrVal !== undefined && isFinite(wrVal)) {
+        const wrKey = (tfKey === 'tf1m' ? 'tf1m' : tfKey) as keyof typeof state.indicators.williamsRMultiTimeframe;
+        const wrMtf = state.indicators.williamsRMultiTimeframe || { tf1m: 50, tf5m: 50, tf15m: 50, tf1h: 50, tf4h: 50 };
+        (wrMtf as any)[wrKey] = parseFloat(wrVal.toFixed(1));
+        state.indicators.williamsRMultiTimeframe = wrMtf;
+        const avg = (wrMtf.tf1m + wrMtf.tf5m + wrMtf.tf15m + wrMtf.tf1h + wrMtf.tf4h) / 5;
+        state.indicators.williamsR200 = parseFloat(avg.toFixed(1));
+      }
+    }
+
+    state.hunter = this.hunterEngine.evaluate(
+      kline.symbol,
+      state.indicators.rsiMultiTimeframe,
+      state.indicators.williamsRMultiTimeframe
+    );
+    state.timestamp = Date.now();
+  }
 
   // In-memory symbol state storage
   private symbolStates: Map<string, AggregatedSymbolState> = new Map();
@@ -157,8 +320,9 @@ export class MarketDataEngine {
         state.timestamp = Date.now();
 
         // Fetch exact Binance Multi-Timeframe RSIs & Williams %R 200 from Binance REST API
-        const mtfRsi = await this.restManager.getMultiTimeframeRSIs(sym);
-        const mtfWr = await this.restManager.getMultiTimeframeWilliamsR(sym);
+        const mtfData = await this.getMtfData(sym);
+        const mtfRsi = mtfData?.rsi || null;
+        const mtfWr = mtfData?.wr || null;
         if (state.indicators) {
           if (mtfRsi) state.indicators.rsiMultiTimeframe = mtfRsi;
           if (mtfWr) {
@@ -193,8 +357,6 @@ export class MarketDataEngine {
         try {
           const funding = await this.restManager.getFundingRate(sym);
           const oi = await this.restManager.getOpenInterest(sym);
-          const mtfRsi = await this.restManager.getMultiTimeframeRSIs(sym);
-          const mtfWr = await this.restManager.getMultiTimeframeWilliamsR(sym);
           const state = this.symbolStates.get(sym);
 
           if (state) {
@@ -202,14 +364,6 @@ export class MarketDataEngine {
             if (oi) {
               state.openInterest = oi.openInterest;
               state.openInterestDeltaPct = oi.openInterestDeltaPct;
-            }
-            if (state.indicators) {
-              if (mtfRsi) state.indicators.rsiMultiTimeframe = mtfRsi;
-              if (mtfWr) {
-                state.indicators.williamsRMultiTimeframe = mtfWr;
-                const avg = (mtfWr.tf1m + mtfWr.tf5m + mtfWr.tf15m + mtfWr.tf1h + mtfWr.tf4h) / 5;
-                state.indicators.williamsR200 = parseFloat(avg.toFixed(1));
-              }
             }
             state.timestamp = Date.now();
             this.evaluateSignals(sym);
@@ -226,12 +380,28 @@ export class MarketDataEngine {
 
 
   public startWebsocket(): void {
-    this.wsManager = new WebSocketManager(this.symbols, {
+    // SPOT manager: live aggTrades + MTF klines. Spot market data is never
+    // silently IP-blocked (unlike futures non-depth streams on some datacenter IPs).
+    this.spotWs = new WebSocketManager(this.symbols, {
       onTick: (tick) => this.processTick(tick),
-      onDepth: (depth) => this.processDepth(depth),
       onKline: (kline) => this.processKline(kline)
-    });
+    }, { market: 'spot', trades: true, klines: true, depthLevel: null });
+    this.spotWs.connect();
+
+    // FUTURES manager: orderbook depth only (reliable from datacenter IPs).
+    this.wsManager = new WebSocketManager(this.symbols, {
+      onDepth: (depth) => this.processDepth(depth)
+    }, { market: 'futures', trades: false, klines: false, depthLevel: 10 });
     this.wsManager.connect();
+  }
+
+  private updateSymbolsForWebsockets(symbols: string[], focused: string | null): void {
+    if (this.spotWs) {
+      this.spotWs.updateSymbols(symbols, focused);
+    }
+    if (this.wsManager) {
+      this.wsManager.updateSymbols(symbols, focused);
+    }
   }
 
   public processTick(tick: MarketTick): void {
@@ -261,7 +431,12 @@ export class MarketDataEngine {
       this.emitTrade(closedTrade);
     }
 
-    // Recalculate live VWAP, POC & indicators on every incoming tick
+    // Live rolling CVD delta — once per aggTrade, never double-counted
+    this.orderbookEngine.updateCVD(tick);
+
+    // Update last candle in place on every tick (cheap), but only fully
+    // re-evaluate indicators every IND_CALC_THROTTLE_MS to avoid event-loop
+    // stall on high-frequency symbols.
     const klines = this.candleHistory.get(tick.symbol);
     if (klines && klines.length > 0) {
       const lastCandle = klines[klines.length - 1];
@@ -269,13 +444,18 @@ export class MarketDataEngine {
       if (tick.price > lastCandle.high) lastCandle.high = tick.price;
       if (tick.price < lastCandle.low) lastCandle.low = tick.price;
 
-      const updatedInd = this.indicatorEngine.evaluate(
-        klines,
-        state.indicators?.rsiMultiTimeframe,
-        state.indicators?.williamsRMultiTimeframe
-      );
-      if (updatedInd) {
-        state.indicators = updatedInd;
+      const now = Date.now();
+      const lastCalc = this.lastIndCalcAt.get(tick.symbol) || 0;
+      if (now - lastCalc >= MarketDataEngine.IND_CALC_THROTTLE_MS) {
+        const updatedInd = this.indicatorEngine.evaluate(
+          klines,
+          state.indicators?.rsiMultiTimeframe,
+          state.indicators?.williamsRMultiTimeframe
+        );
+        if (updatedInd) {
+          state.indicators = updatedInd;
+        }
+        this.lastIndCalcAt.set(tick.symbol, now);
       }
     }
 
@@ -313,6 +493,18 @@ export class MarketDataEngine {
     const val = this.validator.validateCandle(kline);
     if (!val.valid) return;
 
+    // Non-1m klines feed the live MTF RSI / W%R(200) matrix
+    if (kline.interval !== '1m') {
+      this.updateMtfFromKline(kline);
+      this.ensureMtfHistory(kline.symbol, kline.interval);
+      const state = this.symbolStates.get(kline.symbol);
+      if (state) {
+        state.timestamp = Date.now();
+        this.notifyListeners(state);
+      }
+      return;
+    }
+
     const history = this.candleHistory.get(kline.symbol) || [];
     if (history.length > 0 && history[history.length - 1].openTime === kline.openTime) {
       history[history.length - 1] = kline;
@@ -328,6 +520,20 @@ export class MarketDataEngine {
     const existingMtf = state.indicators?.rsiMultiTimeframe;
     const existingWrMtf = state.indicators?.williamsRMultiTimeframe;
     state.indicators = this.indicatorEngine.evaluate(history, existingMtf, existingWrMtf) || undefined;
+
+    // Live W%R(200) for the 1m bucket (cheap short-array path, updates ~1/2s)
+    if (state.indicators && history.length >= 15) {
+      const wrMtf = state.indicators.williamsRMultiTimeframe || { tf1m: 50, tf5m: 50, tf15m: 50, tf1h: 50, tf4h: 50 };
+      const wr1mArr = this.indicatorEngine.calculateWilliamsR(history, 200);
+      const wr1mVal = wr1mArr[wr1mArr.length - 1];
+      if (wr1mVal !== undefined && isFinite(wr1mVal)) {
+        wrMtf.tf1m = parseFloat(wr1mVal.toFixed(1));
+        state.indicators.williamsRMultiTimeframe = wrMtf;
+        const avg = (wrMtf.tf1m + wrMtf.tf5m + wrMtf.tf15m + wrMtf.tf1h + wrMtf.tf4h) / 5;
+        state.indicators.williamsR200 = parseFloat(avg.toFixed(1));
+      }
+    }
+
     state.regime = this.regimeEngine.evaluate(history, state.indicators?.adx14.adx || 25);
     state.hunter = this.hunterEngine.evaluate(kline.symbol, state.indicators?.rsiMultiTimeframe, state.indicators?.williamsRMultiTimeframe);
     state.volume24h = history.reduce((sum, c) => sum + c.volume * c.close, 0);
@@ -520,12 +726,18 @@ export class MarketDataEngine {
         const batch = screenerPool.slice(i, i + batchSize15m);
         await Promise.all(batch.map(async (coin) => {
           try {
+            const cachedRsi = this.getCachedRsi15m(coin.symbol, null);
+            if (cachedRsi !== undefined) {
+              rsi15mMap.set(coin.symbol, cachedRsi);
+              return;
+            }
             const klines = await this.restManager.getKlines(coin.symbol, '15m', 50);
             if (klines && klines.length >= 15) {
               const closes = klines.map(c => c.close);
               const rsiValues = this.indicatorEngine.calculateRSI(closes, 14);
               const rsi = rsiValues[rsiValues.length - 1];
               if (rsi !== undefined) {
+                this.getCachedRsi15m(coin.symbol, rsi);
                 rsi15mMap.set(coin.symbol, rsi);
               }
             }
@@ -550,38 +762,47 @@ export class MarketDataEngine {
         const batch = candidates.slice(i, i + candidateBatchSize);
         await Promise.all(batch.map(async (coin) => {
           try {
-            const [mtfRsi, mtfWr] = await Promise.all([
-              this.restManager.getMultiTimeframeRSIs(coin.symbol),
-              this.restManager.getMultiTimeframeWilliamsR(coin.symbol)
-            ]);
+            const existingState = this.symbolStates.get(coin.symbol);
+            // Prefer live WS-updated MTF values; REST only as a fallback for new symbols
+            const liveRsi = existingState?.indicators?.rsiMultiTimeframe;
+            const liveWr = existingState?.indicators?.williamsRMultiTimeframe;
+            let mtfRsi = liveRsi || null;
+            let mtfWr = liveWr || null;
+            if (!liveRsi || !liveWr) {
+              const mtfData = await this.getMtfData(coin.symbol);
+              mtfRsi = mtfRsi || mtfData?.rsi || null;
+              mtfWr = mtfWr || mtfData?.wr || null;
+            }
 
             if (mtfRsi && mtfWr) {
               const hunterState = this.hunterEngine.evaluate(coin.symbol, mtfRsi, mtfWr);
-              
-              let state = this.symbolStates.get(coin.symbol);
+
+              let state = existingState;
               if (!state) {
                 state = { symbol: coin.symbol, timestamp: Date.now() };
                 this.symbolStates.set(coin.symbol, state);
               }
               state.hunter = hunterState;
 
-              // Pre-populate indicators with fetched MTF values
-              const avg = (mtfWr.tf1m + mtfWr.tf5m + mtfWr.tf15m + mtfWr.tf1h + mtfWr.tf4h) / 5;
-              state.indicators = {
-                symbol: coin.symbol,
-                rsiMultiTimeframe: mtfRsi,
-                williamsRMultiTimeframe: mtfWr,
-                williamsR200: parseFloat(avg.toFixed(1)),
-                ema20: 0, ema50: 0, ema200: 0, rsi14: mtfRsi.tf15m, williamsR14: mtfWr.tf15m,
-                macd: { macdLine: 0, signalLine: 0, histogram: 0 },
-                vwap: 0, microVwap: 0, atr14: 0,
-                vpvr: { pocPrice: 0, highVolumeNodes: [], lowVolumeNodes: [] },
-                bollingerBands: { upper: 0, middle: 0, lower: 0 },
-                supertrend: { value: 0, direction: 'BULL' },
-                stochRsi: { k: 50, d: 50 },
-                adx14: { adx: 25, plusDI: 20, minusDI: 20 },
-                timestamp: Date.now()
-              };
+              // Only pre-populate indicators for NEW symbols — never clobber live WS data
+              if (!state.indicators) {
+                const avg = (mtfWr.tf1m + mtfWr.tf5m + mtfWr.tf15m + mtfWr.tf1h + mtfWr.tf4h) / 5;
+                state.indicators = {
+                  symbol: coin.symbol,
+                  rsiMultiTimeframe: mtfRsi,
+                  williamsRMultiTimeframe: mtfWr,
+                  williamsR200: parseFloat(avg.toFixed(1)),
+                  ema20: 0, ema50: 0, ema200: 0, rsi14: mtfRsi.tf15m, williamsR14: mtfWr.tf15m,
+                  macd: { macdLine: 0, signalLine: 0, histogram: 0 },
+                  vwap: 0, microVwap: 0, atr14: 0,
+                  vpvr: { pocPrice: 0, highVolumeNodes: [], lowVolumeNodes: [] },
+                  bollingerBands: { upper: 0, middle: 0, lower: 0 },
+                  supertrend: { value: 0, direction: 'BULL' },
+                  stochRsi: { k: 50, d: 50 },
+                  adx14: { adx: 25, plusDI: 20, minusDI: 20 },
+                  timestamp: Date.now()
+                };
+              }
 
               if (hunterState.hunterScore >= ScreenerConfig.hunter.threshold) {
                 matchedCoins.push(coin);
@@ -719,7 +940,7 @@ export class MarketDataEngine {
       );
 
       // WebSocket Promotion Layer: Only subscribe to Majors OR coins with Hunter Score >= 60 OR Focused symbol
-      if (this.wsManager) {
+      if (this.wsManager || this.spotWs) {
         const wsSymbols = discovered
           .filter(c => {
             const s = this.symbolStates.get(c.symbol);
@@ -729,13 +950,18 @@ export class MarketDataEngine {
             return score >= 60 || isMajor || isFocused;
           })
           .map(c => c.symbol);
-        this.wsManager.updateSymbols(wsSymbols, this.focusedSymbol);
+        this.updateSymbolsForWebsockets(wsSymbols, this.focusedSymbol);
         console.log(`MarketDataEngine: WebSocket promoted ${wsSymbols.length} symbols. Focus coin: ${this.focusedSymbol || 'None'}`);
+
+        // One-time REST backfill of MTF kline history so the live WS-based
+        // RSI/W%R(200) matrix is accurate immediately (then WS keeps it fresh).
+        this.seedMtfHistories(wsSymbols);
       }
 
-      // Calculate dynamic next interval (Fast 10s maximum discovery interval)
+      // Calculate dynamic next interval. 30s default reduces REST load ~3x;
+      // tighten to 15s only when paper positions are open so TP/SL stays fresh.
       const activePositions = this.paperEngine.getPositions();
-      let nextInterval = 10000; // Fast 10s discovery refresh so real data never lags
+      let nextInterval = activePositions.length > 0 ? 15000 : 30000;
 
       console.log(`MarketDataEngine: Next discovery in ${nextInterval / 1000}s | Positions=${activePositions.length} | HeatCandidates=${heatCandidates.length}`);
       this.discoveryTimer = setTimeout(() => this.runDiscoveryPipeline(), nextInterval);

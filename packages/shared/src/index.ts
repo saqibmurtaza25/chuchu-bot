@@ -103,7 +103,9 @@ export interface MicrostructureState {
   orderbookBuyerPct: number;  // Real Buyer % (e.g. 63.5%)
   totalBidDepth: number;
   totalAskDepth: number;
-  cvd: number;                // Cumulative Volume Delta USD notional
+  cvd: number;                // Cumulative Volume Delta USD notional (60s rolling window)
+  cvdDelta5s: number;         // CVD delta over the last 5 seconds (superfast live)
+  cvdPerSec: number;          // CVD rate per second (5s window / elapsed)
   tickVelocity: number;
   whaleActivity: boolean;
   icebergDetected: boolean;

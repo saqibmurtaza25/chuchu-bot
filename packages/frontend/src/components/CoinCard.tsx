@@ -2,7 +2,7 @@ import React from 'react';
 import { AggregatedSymbolState, CandidateLifecycle } from '@chuchu/shared';
 import { ArrowUpRight, ArrowDownRight, Layers, Star } from 'lucide-react';
 import { useChuchuStore } from '../store/useChuchuStore';
-import { formatPrice, formatLatencyDelay } from '../utils/formatting';
+import { formatPrice, formatLatencyDelay, formatUsdCompact } from '../utils/formatting';
 
 interface CoinCardProps {
   state: AggregatedSymbolState;
@@ -137,7 +137,8 @@ export const CoinCard: React.FC<CoinCardProps> = React.memo(({ state }) => {
   const openInterest = state.openInterest || 15000;
   const oiDelta = state.openInterestDeltaPct || 0;
   const cvd = state.microstructure?.cvd || 0;
-  const cvdMb = (cvd / 1_000_000).toFixed(1);
+  const cvdPerSec = state.microstructure?.cvdPerSec || 0;
+  const cvdDelta5s = state.microstructure?.cvdDelta5s || 0;
   const volume = state.volume24h || 50_000_000;
   const vwap = state.indicators?.vwap || price;
   const atr = state.indicators?.atr14 || price * 0.015;
@@ -332,7 +333,15 @@ export const CoinCard: React.FC<CoinCardProps> = React.memo(({ state }) => {
         <div className="flex justify-between">
           <span className="text-chuchu-muted font-sans">CVD Delta:</span>
           <span className={`font-semibold ${cvd >= 0 ? 'text-chuchu-green' : 'text-chuchu-red'}`}>
-            {cvd >= 0 ? `+$${cvdMb}M` : `-$${Math.abs(Number(cvdMb))}M`}
+            {formatUsdCompact(cvd)}
+          </span>
+        </div>
+
+        <div className="flex justify-between">
+          <span className="text-chuchu-muted font-sans">CVD/s:</span>
+          <span className={`font-semibold ${cvdPerSec >= 0 ? 'text-chuchu-green' : 'text-chuchu-red'}`}>
+            {formatUsdCompact(cvdPerSec)}
+            {cvdDelta5s !== 0 && <span className="text-[10px] ml-1">5s {formatUsdCompact(cvdDelta5s)}</span>}
           </span>
         </div>
 

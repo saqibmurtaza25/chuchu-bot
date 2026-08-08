@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { DiscoveredCoin, HeatCandidate, PrioritizedCandidate, CandidateLifecycle } from '@chuchu/shared';
 import { getRsiColorClass } from '../components/CoinCard';
-import { formatPrice, formatLatencyDelay } from '../utils/formatting';
+import { formatPrice, formatLatencyDelay, formatUsdCompact } from '../utils/formatting';
 
 type ScannerTab = 'discovery' | 'heat' | 'signals' | 'all';
 type TimeframeFilter = 'ALL' | '5m' | '15m' | '1H' | '4H' | '12H';
@@ -400,9 +400,7 @@ const SignalsTab: React.FC<{
                 <div className="p-1.5 bg-slate-900/90 rounded border border-slate-700/60 col-span-2">
                   <div className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider mb-0.5">CVD Delta</div>
                   <div className={`font-extrabold text-sm ${(s.state.microstructure?.cvd || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {(s.state.microstructure?.cvd || 0) >= 0 
-                      ? `+$${((s.state.microstructure?.cvd || 0) / 1_000_000).toFixed(1)}M` 
-                      : `-$${Math.abs((s.state.microstructure?.cvd || 0) / 1_000_000).toFixed(1)}M`}
+                    {formatUsdCompact(s.state.microstructure?.cvd || 0)}
                   </div>
                 </div>
                 <div className="p-1.5 bg-slate-900/90 rounded border border-slate-700/60">

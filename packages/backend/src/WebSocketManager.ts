@@ -8,17 +8,34 @@ export interface WebSocketManagerHandlers {
   onStatusChange?: (status: 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'RECONNECTING') => void;
 }
 
+export interface WebSocketManagerOptions {
+  /** 'spot' uses stream.binance.com, 'futures' uses fstream.binance.com */
+  market?: 'spot' | 'futures';
+  /** Subscribe aggTrade streams */
+  trades?: boolean;
+  /** Subscribe MTF kline streams (1m/5m/15m/1h/4h/12h) */
+  klines?: boolean;
+  /** Orderbook depth level, or null/0 to skip depth streams entirely */
+  depthLevel?: number | null;
+}
+
 /**
  * WebSocketManager
- * Ingestion client for Binance Futures WebSocket multiplex streams.
+ * Ingestion client for Binance WebSocket multiplex streams.
  * Handles auto-reconnect with exponential backoff and sequence verification.
+ *
+ * Note: Binance Futures (fstream) can silently drop non-depth market data on
+ * some datacenter IPs. The robust pattern is:
+ *   - SPOT manager  -> aggTrades + klines (never IP-blocked)
+ *   - FUTURES manager -> orderbook depth only
  */
 export class WebSocketManager {
   private ws: WebSocket | null = null;
   private symbols: string[];
   private handlers: WebSocketManagerHandlers;
+  private options: WebSocketManagerOptions;
   private baseUrl = 'wss://fstream.binance.com/ws';
-  
+
   private focusedSymbol: string | null = null;
   private retryCount = 0;
   private maxRetryDelay = 30000;
@@ -26,9 +43,11 @@ export class WebSocketManager {
   private isConnecting = false;
   private isClosedIntentionally = false;
 
-  constructor(symbols: string[], handlers: WebSocketManagerHandlers = {}) {
+  constructor(symbols: string[], handlers: WebSocketManagerHandlers = {}, options: WebSocketManagerOptions = {}) {
     this.symbols = symbols.map(s => s.toLowerCase());
     this.handlers = handlers;
+    this.options = options;
+    this.baseUrl = (options.market === 'spot' ? 'wss://stream.binance.com/ws' : 'wss://fstream.binance.com/ws');
   }
 
   public updateSymbols(newSymbols: string[], focusedSymbol: string | null = null): void {
@@ -49,28 +68,30 @@ export class WebSocketManager {
 
   /**
    * Constructs stream parameter string for multiplex subscription.
-   * Focus coin and Majors get full orderbook depth, WATCH coins get lightweight streams.
+   * Configurable per manager (spot trades/klines vs futures depth).
+   * Majors/Focus get full 20-level depth, WATCH coins get 10-level depth.
    */
   private getStreamNames(symbols: string[]): string[] {
     const streams: string[] = [];
     const focusLower = this.focusedSymbol?.toLowerCase();
-    
+    const mtfKlines = ['1m', '5m', '15m', '1h', '4h', '12h'];
+
     for (const sym of symbols) {
       const symLower = sym.toLowerCase();
-      const isMajor = ['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt', 'xrpusdt'].includes(symLower);
-      const isFocus = focusLower && symLower === focusLower;
 
-      if (isMajor || isFocus) {
+      if (this.options.trades !== false) {
         streams.push(`${symLower}@aggTrade`);
-        streams.push(`${symLower}@depth20@100ms`); // Heavy L2 orderbook
-        streams.push(`${symLower}@kline_1m`);
-        streams.push(`${symLower}@markPrice@1s`);
-      } else {
-        // WATCH Level: Skip L2 depth stream to save bandwidth but keep miniTicker rolling updates
-        streams.push(`${symLower}@aggTrade`);
-        streams.push(`${symLower}@miniTicker`);
-        streams.push(`${symLower}@kline_1m`);
-        streams.push(`${symLower}@markPrice@1s`);
+      }
+      if (this.options.klines) {
+        for (const tf of mtfKlines) {
+          streams.push(`${symLower}@kline_${tf}`);
+        }
+      }
+      if (this.options.depthLevel && this.options.depthLevel > 0) {
+        const isMajor = ['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt', 'xrpusdt'].includes(symLower);
+        const isFocus = focusLower && symLower === focusLower;
+        const level = (isMajor || isFocus) ? 20 : Math.min(this.options.depthLevel, 10);
+        streams.push(`${symLower}@depth${level}@100ms`);
       }
     }
     return streams;

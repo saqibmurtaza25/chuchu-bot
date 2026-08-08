@@ -39,11 +39,11 @@ export const ScreenerConfig = {
     fundingRateBonus: 5 // Funding rate alignment bonus
   },
 
-  // Polling Intervals in Milliseconds (Safe 15s REST polling to prevent Binance IP rate-limit Code -1003)
+  // Polling Intervals in Milliseconds (30s REST polling to prevent Binance IP rate-limit Code -1003)
   intervals: {
-    discoveryScan: 15000,    // 15 seconds
-    preFilterRefresh: 15000, // 15 seconds
-    derivativesPoll: 15000   // 15 seconds
+    discoveryScan: 30000,    // 30 seconds
+    preFilterRefresh: 30000, // 30 seconds
+    derivativesPoll: 30000   // 30 seconds
   },
 
   // Auto-Trading Settings

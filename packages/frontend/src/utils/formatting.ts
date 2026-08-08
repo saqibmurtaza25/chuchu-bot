@@ -75,6 +75,35 @@ export const formatTime = (timestamp: number, timezone: TimezoneMode): string =>
 };
 
 /**
+ * Formats a USD value in compact form with an explicit sign:
+ *   >= $1M -> "+$3.2M"   <-$1M -> "-$3.2M"
+ *   >= $1K -> "+$12.4K"  <-$1K -> "-$12.4K"
+ *   else    -> "+$980"   or   "-$980"
+ * Small non-zero values never collapse to "$0.0M" — they show real numbers.
+ */
+export const formatUsdCompact = (value: number): string => {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '-' : '+';
+  if (abs >= 1_000_000) {
+    return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+  }
+  if (abs >= 1_000) {
+    return `${sign}$${(abs / 1_000).toFixed(1)}K`;
+  }
+  return `${sign}$${abs.toFixed(0)}`;
+};
+
+/**
+ * Formats a USD value with the color class for CVD delta (green positive, red negative).
+ */
+export const formatCvd = (value: number): { text: string; color: string } => {
+  return {
+    text: formatUsdCompact(value),
+    color: value >= 0 ? 'text-emerald-400' : 'text-rose-400'
+  };
+};
+
+/**
  * Returns a human readable string for latency delay, e.g. "12ms delayed" or "1.5s delayed"
  */
 export const formatLatencyDelay = (eventTimestamp: number): string => {

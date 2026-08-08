@@ -8,6 +8,8 @@ import { DepthSnapshot, MicrostructureState, MarketTick } from '@chuchu/shared';
 export class OrderbookEngine {
   private depthHistory: Map<string, DepthSnapshot[]> = new Map();
   private cvdMap: Map<string, number> = new Map();
+  private cvdTrades: Map<string, { price: number; qty: number; ts: number; buyerMaker: boolean }[]> = new Map();
+  private static readonly CVD_WINDOW_MS = 60_000; // 60s rolling CVD delta
   private maxHistoryLength = 20;
 
   public calculateImbalance(bids: { price: number; quantity: number }[], asks: { price: number; quantity: number }[]): { obi: number; totalBid: number; totalAsk: number; buyerPct: number } {
@@ -92,13 +94,58 @@ export class OrderbookEngine {
     return parseFloat(Math.min(100, Math.max(0, spoofScore)).toFixed(1));
   }
 
+  /**
+   * Rolling 60s Cumulative Volume Delta (USD notional).
+   * Called ONCE per aggTrade tick — never double-counted.
+   */
   public updateCVD(tick: MarketTick): number {
-    let currentCvd = this.cvdMap.get(tick.symbol) || 0;
-    const notional = tick.price * tick.quantity;
-    const delta = tick.isBuyerMaker ? -notional : +notional;
-    currentCvd += delta;
-    this.cvdMap.set(tick.symbol, currentCvd);
-    return currentCvd;
+    let trades = this.cvdTrades.get(tick.symbol);
+    if (!trades) {
+      trades = [];
+      this.cvdTrades.set(tick.symbol, trades);
+    }
+    trades.push({ price: tick.price, qty: tick.quantity, ts: tick.timestamp || Date.now(), buyerMaker: tick.isBuyerMaker });
+
+    // Prune trades older than the rolling window
+    const cutoff = Date.now() - OrderbookEngine.CVD_WINDOW_MS;
+    while (trades.length > 0 && trades[0].ts < cutoff) trades.shift();
+
+    let delta = 0;
+    for (const t of trades) {
+      const notional = t.price * t.qty;
+      delta += t.buyerMaker ? -notional : +notional;
+    }
+    // Signed 60s Cumulative Volume Delta (aggressive buys +, aggressive sells -)
+    this.cvdMap.set(tick.symbol, delta);
+    return delta;
+  }
+
+  public getCVD(symbol: string): number {
+    // Re-prune so stale trades age out even between ticks
+    const trades = this.cvdTrades.get(symbol);
+    if (trades && trades.length > 0) {
+      const cutoff = Date.now() - OrderbookEngine.CVD_WINDOW_MS;
+      while (trades.length > 0 && trades[0].ts < cutoff) trades.shift();
+    }
+    return this.cvdMap.get(symbol) || 0;
+  }
+
+  /**
+   * CVD delta over the last `windowMs` — used for the superfast per-second rate.
+   */
+  public getCVDWindow(symbol: string, windowMs: number): { delta: number; elapsedMs: number } {
+    const trades = this.cvdTrades.get(symbol);
+    if (!trades || trades.length === 0) return { delta: 0, elapsedMs: 0 };
+    const now = Date.now();
+    const cutoff = now - windowMs;
+    let delta = 0;
+    let elapsedMs = now - trades[0].ts;
+    for (const t of trades) {
+      if (t.ts < cutoff) continue;
+      const notional = t.price * t.qty;
+      delta += t.buyerMaker ? -notional : +notional;
+    }
+    return { delta, elapsedMs };
   }
 
   public evaluate(depth: DepthSnapshot, recentTicks: MarketTick[] = []): MicrostructureState {
@@ -116,11 +163,11 @@ export class OrderbookEngine {
     const weightedImbalance = this.calculateWeightedImbalance(depth.bids, depth.asks);
     const spoofingProbabilityPct = this.detectSpoofing(symbol, depth);
 
-    let cvd = this.cvdMap.get(symbol) || 0;
-    if (recentTicks.length > 0) {
-      const lastTick = recentTicks[recentTicks.length - 1];
-      cvd = this.updateCVD(lastTick);
-    }
+    const cvd = this.getCVD(symbol);
+
+    // Per-second CVD velocity (5s window) — superfast live reading
+    const { delta: cvdDelta5s, elapsedMs } = this.getCVDWindow(symbol, 5000);
+    const cvdPerSec = elapsedMs > 0 ? parseFloat((cvdDelta5s / (elapsedMs / 1000)).toFixed(1)) : 0;
 
     let tickVelocity = 0;
     if (recentTicks.length >= 2) {
@@ -175,6 +222,8 @@ export class OrderbookEngine {
       totalBidDepth: parseFloat(totalBid.toFixed(2)),
       totalAskDepth: parseFloat(totalAsk.toFixed(2)),
       cvd: parseFloat(cvd.toFixed(2)),
+      cvdDelta5s: parseFloat(cvdDelta5s.toFixed(2)),
+      cvdPerSec,
       tickVelocity,
       whaleActivity,
       icebergDetected,
