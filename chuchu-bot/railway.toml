@@ -1,0 +1,10 @@
+# Railway config — Dockerfile is auto-detected. Push repo to GitHub, create a project,
+# and "Deploy from GitHub repo" or use the Railway CLI.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node packages/backend/start-server.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
