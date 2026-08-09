@@ -1,0 +1,46 @@
+CHUCHU BOT v2 - LOCAL SETUP (Windows)
+=====================================
+
+STEP 1 - INSTALL NODE.JS (required)
+  Download LTS from https://nodejs.org and install it.
+  (Any version 20+ works. Node.js is the only thing you need to install.)
+
+STEP 2 - RUN THE BOT
+  Double-click  chuchubot.bat
+  The script will automatically:
+     - install pnpm (one time)
+     - download all project dependencies (one time, takes a few minutes)
+     - build the engine + backend
+     - start the backend on port 8080
+     - start the dashboard on port 3000
+     - open your browser at http://localhost:3000
+
+  A popup firewall prompt may appear -> click "Allow access" (needed so the
+  dashboard can talk to the local backend on 127.0.0.1).
+
+STEP 3 - USE IT
+  Dashboard:        http://localhost:3000
+  Backend API:      http://localhost:8080
+  Health check:     http://localhost:8080/health
+
+STEP 4 - STOP THE BOT
+  Close the two windows titled "CHUCHU Backend (8080)" and "CHUCHU Frontend (3000)".
+  Or just close the black launcher window after closing those two.
+
+TROUBLESHOOTING
+  - "Node.js not found"  -> Node.js is not installed. Do STEP 1.
+  - Backend window shows API errors -> Binance may block your network/region.
+    The bot falls back gracefully; dashboard still works for signals.
+  - Port 3000 already in use -> close any program using port 3000 and run again.
+
+REAL ACCOUNT (LIVE TRADING)
+  - Open Settings -> BINANCE FUTURES LIVE ACCOUNT.
+  - Paste your Binance Futures API Key + Secret (enable Futures permission,
+    disable withdrawal), click "SAVE & TEST CONNECTION".
+  - On the same page set EXECUTION ACCOUNT to REAL.
+  - Start with small margin (5 USDT) and low leverage (3-5x).
+  - Keys are kept in memory only and never saved to disk.
+
+NOTES
+  - Default is PAPER trading ($100 virtual balance) - totally safe.
+  - This is for your own education/trading. Always manage your own risk.
