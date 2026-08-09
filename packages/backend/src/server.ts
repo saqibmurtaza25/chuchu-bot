@@ -186,8 +186,33 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     const config = req.body;
     if (config) {
       dataEngine.autoTradeConfig = { ...dataEngine.autoTradeConfig, ...config };
+      dataEngine.applyTrailingConfig();
     }
     res.json({ success: true, config: dataEngine.autoTradeConfig });
+  });
+
+  // ── Real Binance account integration ──────────────────────────────
+  app.get('/api/v1/exchange/status', async (req: Request, res: Response) => {
+    try {
+      const info = await dataEngine.exchangeExecutor.getAccountInfo();
+      res.json(info);
+    } catch (e: any) {
+      res.status(500).json({ configured: true, error: e.message });
+    }
+  });
+
+  app.post('/api/v1/exchange/keys', (req: Request, res: Response) => {
+    const { apiKey, apiSecret } = req.body || {};
+    if (!apiKey || !apiSecret) {
+      return res.status(400).json({ error: 'apiKey and apiSecret are required' });
+    }
+    dataEngine.exchangeExecutor.configure(apiKey, apiSecret);
+    res.json({ success: true, configured: dataEngine.exchangeExecutor.isConfigured() });
+  });
+
+  app.post('/api/v1/exchange/disconnect', (req: Request, res: Response) => {
+    dataEngine.exchangeExecutor.disconnect();
+    res.json({ success: true, configured: false });
   });
 
   app.post('/api/v1/reset', (req: Request, res: Response) => {

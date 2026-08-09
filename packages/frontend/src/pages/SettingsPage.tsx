@@ -1,10 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useChuchuStore } from '../store/useChuchuStore';
-import { Settings, Save, RefreshCw } from 'lucide-react';
+import { Settings, Save, RefreshCw, KeyRound, Unplug, Lock } from 'lucide-react';
 
 export const SettingsPage: React.FC = () => {
-  const { serverUrl, connect, autoTradeConfig, setAutoTradeConfig } = useChuchuStore();
+  const {
+    serverUrl,
+    connect,
+    autoTradeConfig,
+    setAutoTradeConfig,
+    exchangeStatus,
+    fetchExchangeStatus,
+    saveExchangeKeys,
+    disconnectExchange
+  } = useChuchuStore();
   const [urlInput, setUrlInput] = useState(serverUrl);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiSecretInput, setApiSecretInput] = useState('');
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle');
+
+  useEffect(() => {
+    fetchExchangeStatus();
+  }, [fetchExchangeStatus]);
 
   const handleSave = () => {
     connect(urlInput);
@@ -13,6 +29,31 @@ export const SettingsPage: React.FC = () => {
   const handleAutoTradeChange = (key: keyof typeof autoTradeConfig, value: any) => {
     setAutoTradeConfig({ [key]: value });
   };
+
+  const handleSaveKeys = async () => {
+    if (!apiKeyInput || !apiSecretInput) return;
+    setSaveState('saving');
+    const ok = await saveExchangeKeys(apiKeyInput, apiSecretInput);
+    setSaveState(ok ? 'done' : 'error');
+    if (ok) {
+      setApiKeyInput('');
+      setApiSecretInput('');
+    }
+    setTimeout(() => setSaveState('idle'), 2500);
+  };
+
+  const toggle = (label: string, key: keyof typeof autoTradeConfig, value: boolean) => (
+    <button
+      onClick={() => handleAutoTradeChange(key, !value)}
+      className={`px-3 py-1.5 rounded-md text-xs font-bold border transition-all ${
+        value
+          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+          : 'bg-chuchu-card text-chuchu-muted border-chuchu-border'
+      }`}
+    >
+      {value ? 'ON' : 'OFF'}
+    </button>
+  );
 
   return (
     <div className="p-4 sm:p-6 space-y-6 font-sans text-chuchu-text max-w-4xl">
@@ -23,7 +64,7 @@ export const SettingsPage: React.FC = () => {
           <span>SYSTEM CONFIGURATION & ENGINE WEIGHTS</span>
         </h1>
         <p className="text-chuchu-muted text-xs mt-1">
-          Configure WebSocket gateway endpoint, setup quality thresholds, and risk bounds
+          Configure WebSocket gateway endpoint, setup quality thresholds, risk bounds, trailing stop & real-account trading
         </p>
       </div>
 
@@ -72,7 +113,39 @@ export const SettingsPage: React.FC = () => {
               <option value="AUTO">AUTO (Full Execution)</option>
             </select>
           </div>
-          
+
+          <div className="space-y-2">
+            <label className="text-chuchu-muted font-bold block uppercase text-[10px]">EXECUTION ACCOUNT</label>
+            <select
+              value={autoTradeConfig.execution}
+              onChange={(e) => handleAutoTradeChange('execution', e.target.value)}
+              className="w-full px-3 py-2 bg-chuchu-bg border border-chuchu-border rounded text-chuchu-text font-bold focus:outline-none focus:border-chuchu-cyan"
+            >
+              <option value="PAPER">PAPER (Virtual — $100 Demo)</option>
+              <option value="REAL">REAL (Live Binance Futures)</option>
+            </select>
+            {autoTradeConfig.execution === 'REAL' && !exchangeStatus?.configured && (
+              <div className="text-amber-400 text-[10px] font-bold">
+                WARNING: REAL mode needs Binance API keys below. Without keys it falls back to paper.
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-chuchu-muted font-bold block uppercase text-[10px]">MIN RISK:REWARD (SMART-MONEY FILTER)</label>
+            <select
+              value={autoTradeConfig.minRiskReward}
+              onChange={(e) => handleAutoTradeChange('minRiskReward', Number(e.target.value))}
+              className="w-full px-3 py-2 bg-chuchu-bg border border-chuchu-border rounded text-chuchu-text font-bold focus:outline-none focus:border-chuchu-cyan"
+            >
+              <option value="1">1.0 (Aggressive)</option>
+              <option value="1.5">1.5 (Balanced)</option>
+              <option value="2">2.0 (Pro Trader)</option>
+              <option value="2.5">2.5 (Premium Setups Only)</option>
+              <option value="3">3.0 (Top-Tier Only)</option>
+            </select>
+          </div>
+
           <div className="space-y-2">
             <label className="text-chuchu-muted font-bold block uppercase text-[10px]">MARGIN PER TRADE (USDT)</label>
             <select
@@ -83,6 +156,7 @@ export const SettingsPage: React.FC = () => {
               <option value="5">5 USDT</option>
               <option value="10">10 USDT</option>
               <option value="20">20 USDT</option>
+              <option value="50">50 USDT</option>
             </select>
           </div>
 
@@ -93,6 +167,7 @@ export const SettingsPage: React.FC = () => {
               onChange={(e) => handleAutoTradeChange('leverage', Number(e.target.value))}
               className="w-full px-3 py-2 bg-chuchu-bg border border-chuchu-border rounded text-chuchu-text font-bold focus:outline-none focus:border-chuchu-cyan"
             >
+              <option value="3">3x</option>
               <option value="5">5x</option>
               <option value="10">10x</option>
               <option value="20">20x</option>
@@ -108,6 +183,7 @@ export const SettingsPage: React.FC = () => {
             >
               <option value="1">1 Trade</option>
               <option value="2">2 Trades</option>
+              <option value="3">3 Trades</option>
             </select>
           </div>
 
@@ -118,10 +194,124 @@ export const SettingsPage: React.FC = () => {
               onChange={(e) => handleAutoTradeChange('riskPct', Number(e.target.value))}
               className="w-full px-3 py-2 bg-chuchu-bg border border-chuchu-border rounded text-chuchu-text font-bold focus:outline-none focus:border-chuchu-cyan"
             >
+              <option value="0.5">0.5% Risk</option>
               <option value="1">1% Risk</option>
               <option value="2">2% Risk</option>
               <option value="3">3% Risk</option>
             </select>
+          </div>
+        </div>
+
+        {/* Trailing Stop */}
+        <div className="pt-4 border-t border-chuchu-border space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="text-chuchu-muted font-bold block uppercase text-[10px]">TRAILING STOP (PROFIT LOCK)</label>
+              <p className="text-chuchu-muted text-[10px] mt-0.5">
+                Locks profits — once price gains activation% of the entry→TP distance, the stop trails behind price and never moves back.
+              </p>
+            </div>
+            {toggle('Trailing Stop', 'trailingStopEnabled', autoTradeConfig.trailingStopEnabled ?? true)}
+          </div>
+          {autoTradeConfig.trailingStopEnabled && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-chuchu-muted font-bold block uppercase text-[10px]">ACTIVATION (% of entry→TP distance)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={autoTradeConfig.trailingActivationPct ?? 40}
+                  onChange={(e) => handleAutoTradeChange('trailingActivationPct', Number(e.target.value))}
+                  className="w-full bg-chuchu-panel border border-chuchu-border rounded-lg px-4 py-2 text-chuchu-text text-sm focus:outline-none focus:border-chuchu-cyan"
+                />
+                <p className="text-chuchu-muted text-[10px]">Lower = arms earlier. 40 = arms at 40% of the way to TP.</p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-chuchu-muted font-bold block uppercase text-[10px]">TRAIL DISTANCE (% of entry price)</label>
+                <input
+                  type="number"
+                  min={0.1}
+                  step={0.1}
+                  value={autoTradeConfig.trailingDistancePct ?? 0.6}
+                  onChange={(e) => handleAutoTradeChange('trailingDistancePct', Number(e.target.value))}
+                  className="w-full bg-chuchu-panel border border-chuchu-border rounded-lg px-4 py-2 text-chuchu-text text-sm focus:outline-none focus:border-chuchu-cyan"
+                />
+                <p className="text-chuchu-muted text-[10px]">Higher = wider trail (fewer stop-outs). 0.6 = stop sits 0.6% behind price.</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Real Account Integration */}
+        <div className="pt-4 border-t border-chuchu-border space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="text-chuchu-muted font-bold block uppercase text-[10px] flex items-center space-x-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-chuchu-yellow" />
+                <span>BINANCE FUTURES LIVE ACCOUNT (REAL MONEY)</span>
+              </label>
+              <p className="text-chuchu-muted text-[10px] mt-0.5">
+                Keys are kept in backend memory only — never written to disk or committed. Futures API permission required. IP-allowlist Binance's IP if requested.
+              </p>
+            </div>
+            <button
+              onClick={disconnectExchange}
+              disabled={!exchangeStatus?.configured}
+              className={`flex items-center space-x-1 px-3 py-1.5 rounded-md text-[10px] font-bold border transition-all ${
+                exchangeStatus?.configured
+                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                  : 'bg-chuchu-card text-chuchu-muted border-chuchu-border cursor-not-allowed'
+              }`}
+            >
+              <Unplug className="w-3 h-3" />
+              <span>DISCONNECT</span>
+            </button>
+          </div>
+
+          <div className="rounded-lg border border-chuchu-border bg-chuchu-bg/60 p-3 space-y-3">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-chuchu-muted font-bold">CONNECTION STATUS</span>
+              <span className={`font-black ${exchangeStatus?.configured ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {exchangeStatus?.configured
+                  ? `CONNECTED · ${exchangeStatus.source === 'ENV' ? 'ENV VARS' : 'RUNTIME'} · Balance $${(exchangeStatus.balanceUsdt ?? 0).toFixed(2)}`
+                  : exchangeStatus?.error
+                    ? `ERROR: ${exchangeStatus.error}`
+                    : 'NOT CONNECTED'}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input
+                type="password"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder="API KEY"
+                autoComplete="off"
+                className="px-3 py-2 bg-chuchu-bg border border-chuchu-border rounded text-chuchu-text font-mono text-xs focus:outline-none focus:border-chuchu-cyan"
+              />
+              <input
+                type="password"
+                value={apiSecretInput}
+                onChange={(e) => setApiSecretInput(e.target.value)}
+                placeholder="API SECRET"
+                autoComplete="off"
+                className="px-3 py-2 bg-chuchu-bg border border-chuchu-border rounded text-chuchu-text font-mono text-xs focus:outline-none focus:border-chuchu-cyan"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <button
+                onClick={handleSaveKeys}
+                disabled={!apiKeyInput || !apiSecretInput || saveState === 'saving'}
+                className="px-4 py-2 bg-chuchu-yellow/20 text-chuchu-yellow border border-chuchu-yellow/40 rounded font-bold hover:bg-chuchu-yellow/30 flex items-center space-x-1.5 disabled:opacity-40"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>{saveState === 'saving' ? 'SAVING...' : saveState === 'done' ? 'SAVED ✓' : saveState === 'error' ? 'FAILED' : 'SAVE & TEST CONNECTION'}</span>
+              </button>
+              <button onClick={fetchExchangeStatus} className="flex items-center space-x-1 text-chuchu-muted hover:text-chuchu-text font-bold text-[10px]">
+                <RefreshCw className="w-3 h-3" />
+                <span>REFRESH</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

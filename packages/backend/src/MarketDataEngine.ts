@@ -31,6 +31,7 @@ import {
 
 import { RESTManager } from './RESTManager';
 import { WebSocketManager } from './WebSocketManager';
+import { BinanceFuturesExecutor } from './BinanceFuturesExecutor';
 
 export type StateListener = (state: AggregatedSymbolState) => void;
 export type TradeListener = (trade: PaperTrade) => void;
@@ -63,6 +64,7 @@ export class MarketDataEngine {
   public scannerEngine = new ScannerEngine();
   public signalEngine = new SignalEngine();
   public paperEngine = new PaperTradingEngine();
+  public exchangeExecutor = new BinanceFuturesExecutor();
   public analyticsEngine = new AnalyticsEngine();
 
   // 4-Stage Discovery Pipeline Modules
@@ -252,12 +254,25 @@ export class MarketDataEngine {
 
   public autoTradeConfig: AutoTradeConfig = {
     mode: 'OFF',
+    execution: 'PAPER',
     margin: 10,
     leverage: 10,
     maxOpenTrades: 1,
     riskPct: 2,
-    minSetupQuality: 75
+    minSetupQuality: 75,
+    minRiskReward: 1.5,
+    trailingStopEnabled: true,
+    trailingActivationPct: 40,
+    trailingDistancePct: 0.6
   };
+
+  public applyTrailingConfig(): void {
+    this.paperEngine.setTrailingConfig(
+      this.autoTradeConfig.trailingStopEnabled,
+      this.autoTradeConfig.trailingActivationPct,
+      this.autoTradeConfig.trailingDistancePct
+    );
+  }
 
   public focusedSymbol: string | null = null;
 
@@ -543,7 +558,7 @@ export class MarketDataEngine {
     this.notifyListeners(state);
   }
 
-  private evaluateSignals(symbol: string): void {
+  private async evaluateSignals(symbol: string): Promise<void> {
     const state = this.symbolStates.get(symbol);
     if (!state || !state.lastTick) return;
 
@@ -629,42 +644,64 @@ export class MarketDataEngine {
     if (this.autoTradeConfig.mode === 'AUTO' && signal.signal !== 'NEUTRAL') {
       const activePositions = this.paperEngine.getPositions();
       
+      // Smart-money filter: only enter setups that meet the minimum risk:reward
+      const minRR = this.autoTradeConfig.minRiskReward || 1.5;
+      const rr = signal.riskRewardRatio || 0;
+      
       // Constraint: Check Max Open Trades Limit
       if (activePositions.length < this.autoTradeConfig.maxOpenTrades && !activePositions.some(p => p.symbol === symbol)) {
         const config = this.autoTradeConfig;
         
-        // Calculate target quantity using margin and leverage
-        const usdSize = config.margin * config.leverage;
-        const quantity = parseFloat((usdSize / lastPrice).toFixed(4));
-        
-        if (quantity > 0) {
-          console.log(`MarketDataEngine: Auto-Trading triggering ${signal.signal} order for ${symbol} with Qty=${quantity} (Leverage=${config.leverage}x)`);
+        if (rr < minRR) {
+          console.log(`MarketDataEngine: Skipping ${symbol} — R:R ${rr.toFixed(2)} < ${minRR.toFixed(2)}`);
+        } else {
+          // Calculate target quantity using margin and leverage
+          const usdSize = config.margin * config.leverage;
+          const quantity = parseFloat((usdSize / lastPrice).toFixed(4));
           
-          const intent: PaperOrderIntent = {
-            symbol,
-            side: signal.signal === 'BUY' ? 'BUY' : 'SELL',
-            type: 'MARKET',
-            quantity,
-            stopLoss: signal.stopLoss,
-            takeProfit: signal.takeProfit,
-            leverage: config.leverage,
-            context: {
-              reasonOfEntry: 'AUTO_TRADER_EXECUTION',
-              hunterScore: state.hunter?.hunterScore,
-              setupQuality: signal.setupQuality,
-              rsi: state.indicators?.rsiMultiTimeframe?.tf5m,
-              wmr: state.indicators?.williamsR200,
-              adx: state.indicators?.adx14?.adx,
-              emaTrend: state.indicators ? (state.indicators.ema20 > state.indicators.ema50 ? 'BULL' : 'BEAR') : 'NEUTRAL',
-              marketRegime: state.regime?.regime
+          if (quantity > 0) {
+            console.log(`MarketDataEngine: Auto-Trading triggering ${signal.signal} order for ${symbol} with Qty=${quantity} (Leverage=${config.leverage}x, R:R=${rr.toFixed(2)})`);
+            
+            const intent: PaperOrderIntent = {
+              symbol,
+              side: signal.signal === 'BUY' ? 'BUY' : 'SELL',
+              type: 'MARKET',
+              quantity,
+              stopLoss: signal.stopLoss,
+              takeProfit: signal.takeProfit,
+              leverage: config.leverage,
+              context: {
+                reasonOfEntry: 'AUTO_TRADER_EXECUTION',
+                hunterScore: state.hunter?.hunterScore,
+                setupQuality: signal.setupQuality,
+                rsi: state.indicators?.rsiMultiTimeframe?.tf5m,
+                wmr: state.indicators?.williamsR200,
+                adx: state.indicators?.adx14?.adx,
+                emaTrend: state.indicators ? (state.indicators.ema20 > state.indicators.ema50 ? 'BULL' : 'BEAR') : 'NEUTRAL',
+                marketRegime: state.regime?.regime
+              }
+            };
+            
+            try {
+              // Real-account execution when enabled + keys configured, otherwise paper
+              if (config.execution === 'REAL' && this.exchangeExecutor.isConfigured()) {
+                console.log(`MarketDataEngine: REAL order for ${symbol} ${signal.signal}`);
+                this.exchangeExecutor.setLeverage(symbol, config.leverage).catch((e) => console.error('setLeverage failed:', e.message));
+                const order = await this.exchangeExecutor.placeMarketOrder(symbol, intent.side, quantity);
+                const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
+                trade.orderId = order?.orderId ? String(order.orderId) : trade.orderId;
+                this.emitTrade(trade);
+              } else if (config.execution === 'REAL') {
+                console.warn(`MarketDataEngine: REAL mode selected but Binance keys not configured — falling back to PAPER for ${symbol}`);
+                const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
+                this.emitTrade(trade);
+              } else {
+                const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
+                this.emitTrade(trade);
+              }
+            } catch (err) {
+              console.error(`MarketDataEngine: Auto-Trading order execution failed for ${symbol}:`, err);
             }
-          };
-          
-          try {
-            const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
-            this.emitTrade(trade);
-          } catch (err) {
-            console.error(`MarketDataEngine: Auto-Trading order execution failed for ${symbol}:`, err);
           }
         }
       }

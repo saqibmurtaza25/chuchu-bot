@@ -20,9 +20,18 @@ export class PaperTradingEngine {
   private static readonly MAINTENANCE_MARGIN_PCT = 0.5; // ~0.5% isolated maintenance buffer
   private static readonly FUNDING_INTERVAL_HOURS = 8;
   private static readonly FUNDING_ACCRUAL_MIN_MS = 60 * 60 * 1000; // apply at most hourly
+  private trailingStopEnabled = true;
+  private trailingActivationPct = 40; // % of distance entry→TP that must be gained before trail arms
+  private trailingDistancePct = 0.6; // trail distance as % of entry price
 
   constructor(initialBalance?: number) {
     this.balance = initialBalance !== undefined ? initialBalance : ScreenerConfig.autoTrade.initialBalance;
+  }
+
+  public setTrailingConfig(enabled: boolean, activationPct: number, distancePct: number): void {
+    this.trailingStopEnabled = enabled;
+    if (activationPct > 0 && activationPct < 100) this.trailingActivationPct = activationPct;
+    if (distancePct > 0) this.trailingDistancePct = distancePct;
   }
 
   public getBalance(): number {
@@ -290,7 +299,7 @@ export class PaperTradingEngine {
 
     // Liquidation check (before TP/SL — liquidation takes priority like a real exchange)
     let triggerClose = false;
-    let exitReason: 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION' | undefined;
+    let exitReason: 'TAKE_PROFIT' | 'STOP_LOSS' | 'LIQUIDATION' | 'TRAILING_STOP' | undefined;
 
     const liq = pos.liquidationPrice;
     if (liq !== undefined) {
@@ -303,19 +312,43 @@ export class PaperTradingEngine {
       }
     }
 
+    // Trailing stop (smart-profit lock): arms once price moves activationPct of the
+    // entry→TP distance, then ratchets the stop behind price and never moves it back.
+    const tp = pos.takeProfit;
+    let activeStop = pos.stopLoss;
+    if (!triggerClose && this.trailingStopEnabled && tp !== undefined) {
+      const tpDistance = Math.abs(tp - pos.entryPrice);
+      const activationThreshold = pos.entryPrice + (pos.side === 'LONG' ? 1 : -1) * tpDistance * (this.trailingActivationPct / 100);
+      const gained = pos.side === 'LONG' ? markPrice >= activationThreshold : markPrice <= activationThreshold;
+      if (gained) {
+        pos.trailActivated = true;
+        const trailStop = pos.side === 'LONG'
+          ? markPrice * (1 - this.trailingDistancePct / 100)
+          : markPrice * (1 + this.trailingDistancePct / 100);
+        if (pos.trailingStop === undefined) {
+          pos.trailingStop = parseFloat(trailStop.toFixed(4));
+        } else if (pos.side === 'LONG' && trailStop > pos.trailingStop) {
+          pos.trailingStop = parseFloat(trailStop.toFixed(4));
+        } else if (pos.side === 'SHORT' && trailStop < pos.trailingStop) {
+          pos.trailingStop = parseFloat(trailStop.toFixed(4));
+        }
+      }
+      if (pos.trailActivated) activeStop = pos.trailingStop;
+    }
+
     if (!triggerClose && pos.side === 'LONG') {
-      if (pos.stopLoss && markPrice <= pos.stopLoss) {
+      if (activeStop && markPrice <= activeStop) {
         triggerClose = true;
-        exitReason = 'STOP_LOSS';
+        exitReason = pos.trailActivated ? 'TRAILING_STOP' : 'STOP_LOSS';
       }
       if (pos.takeProfit && markPrice >= pos.takeProfit) {
         triggerClose = true;
         exitReason = 'TAKE_PROFIT';
       }
     } else if (!triggerClose && pos.side === 'SHORT') {
-      if (pos.stopLoss && markPrice >= pos.stopLoss) {
+      if (activeStop && markPrice >= activeStop) {
         triggerClose = true;
-        exitReason = 'STOP_LOSS';
+        exitReason = pos.trailActivated ? 'TRAILING_STOP' : 'STOP_LOSS';
       }
       if (pos.takeProfit && markPrice <= pos.takeProfit) {
         triggerClose = true;

@@ -172,15 +172,22 @@ export interface TradeContext {
   marketRegime?: string;
 }
 
-export type ExitReason = 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL' | 'SIGNAL_REVERSAL' | 'TIME_EXPIRED' | 'LIQUIDATION';
+export type ExitReason = 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL' | 'SIGNAL_REVERSAL' | 'TIME_EXPIRED' | 'LIQUIDATION' | 'TRAILING_STOP';
+
+export type ExecutionMode = 'PAPER' | 'REAL';
 
 export interface AutoTradeConfig {
   mode: 'OFF' | 'SEMI_AUTO' | 'AUTO';
+  execution: ExecutionMode;
   margin: number;
   leverage: number;
   maxOpenTrades: number;
   riskPct: number;
   minSetupQuality: number;
+  minRiskReward: number;
+  trailingStopEnabled: boolean;
+  trailingActivationPct: number;
+  trailingDistancePct: number;
 }
 
 export interface PaperOrderIntent {
@@ -222,6 +229,8 @@ export interface PaperPosition {
   margin: number;
   stopLoss?: number;
   takeProfit?: number;
+  trailingStop?: number;
+  trailActivated?: boolean;
   leverage?: number;
   liquidationPrice?: number;
   fundingPaid?: number;

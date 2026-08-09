@@ -31,6 +31,11 @@ interface ChuchuState {
   autoTradeConfig: AutoTradeConfig;
   setAutoTradeConfig: (config: Partial<AutoTradeConfig>) => Promise<void>;
 
+  exchangeStatus: { configured: boolean; balanceUsdt: number; source: string | null; error?: string } | null;
+  fetchExchangeStatus: () => Promise<void>;
+  saveExchangeKeys: (apiKey: string, apiSecret: string) => Promise<boolean>;
+  disconnectExchange: () => Promise<void>;
+
   connect: (url?: string) => void;
   disconnect: () => void;
   submitOrder: (symbol: string, side: 'BUY' | 'SELL', quantity: number) => Promise<void>;
@@ -92,11 +97,50 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
 
   autoTradeConfig: {
     mode: 'OFF',
+    execution: 'PAPER',
     margin: 10,
     leverage: 10,
     maxOpenTrades: 1,
     riskPct: 2,
-    minSetupQuality: 75
+    minSetupQuality: 75,
+    minRiskReward: 1.5,
+    trailingStopEnabled: true,
+    trailingActivationPct: 40,
+    trailingDistancePct: 0.6
+  },
+
+  exchangeStatus: null,
+  fetchExchangeStatus: async () => {
+    try {
+      const res = await fetch(`${get().serverUrl}/api/v1/exchange/status`);
+      const data = await res.json();
+      set({ exchangeStatus: data });
+    } catch (err) {
+      console.error('Failed to fetch exchange status:', err);
+    }
+  },
+  saveExchangeKeys: async (apiKey, apiSecret) => {
+    try {
+      const res = await fetch(`${get().serverUrl}/api/v1/exchange/keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, apiSecret })
+      });
+      const ok = (await res.json()).success === true;
+      if (ok) await get().fetchExchangeStatus();
+      return ok;
+    } catch (err) {
+      console.error('Failed to save exchange keys:', err);
+      return false;
+    }
+  },
+  disconnectExchange: async () => {
+    try {
+      await fetch(`${get().serverUrl}/api/v1/exchange/disconnect`, { method: 'POST' });
+      await get().fetchExchangeStatus();
+    } catch (err) {
+      console.error('Failed to disconnect exchange:', err);
+    }
   },
 
   setAutoTradeConfig: async (configUpdate) => {
