@@ -425,9 +425,9 @@ export class MarketDataEngine {
     ticks.push(tick);
     if (ticks.length > 30) ticks.shift();
 
-    const closedTrade = this.paperEngine.updateMarkPrice(tick.symbol, tick.price);
+    const closedTrade = this.paperEngine.updateMarkPrice(tick.symbol, tick.price, state.fundingRate);
     if (closedTrade) {
-      console.log(`MarketDataEngine: Auto-TP/SL closed position for ${tick.symbol} at $${tick.price}`);
+      console.log(`MarketDataEngine: Auto-TP/SL/LIQ closed position for ${tick.symbol} at $${tick.price}`);
       this.emitTrade(closedTrade);
     }
 
@@ -647,6 +647,7 @@ export class MarketDataEngine {
             quantity,
             stopLoss: signal.stopLoss,
             takeProfit: signal.takeProfit,
+            leverage: config.leverage,
             context: {
               reasonOfEntry: 'AUTO_TRADER_EXECUTION',
               hunterScore: state.hunter?.hunterScore,

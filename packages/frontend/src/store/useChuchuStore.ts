@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
-import { AggregatedSymbolState, PaperPosition, PaperTrade, AnalyticsMetrics, ScanPipelineResult, AutoTradeConfig } from '@chuchu/shared';
+import { AggregatedSymbolState, PaperPosition, PaperTrade, PaperStats, AnalyticsMetrics, ScanPipelineResult, AutoTradeConfig } from '@chuchu/shared';
 import { TimezoneMode } from '../utils/formatting';
 
 export type ActivePage = 'dashboard' | 'scanner' | 'signals' | 'paper-trading' | 'analytics' | 'settings' | 'health' | 'sniper';
@@ -20,6 +20,7 @@ interface ChuchuState {
   paperBalance: number;
   positions: PaperPosition[];
   tradeHistory: PaperTrade[];
+  paperStats: PaperStats | null;
   analytics: AnalyticsMetrics | null;
   pipeline: ScanPipelineResult | null;
   pipelineLoading: boolean;
@@ -80,6 +81,7 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
   paperBalance: 100,
   positions: [],
   tradeHistory: [],
+  paperStats: null,
   analytics: null,
   pipeline: null,
   pipelineLoading: false,
@@ -146,11 +148,12 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
       get().fetchStateSnapshots();
     });
 
-    socket.on('paper:update', (data: { balance: number; positions: PaperPosition[]; tradeHistory: PaperTrade[] }) => {
+    socket.on('paper:update', (data: { balance: number; positions: PaperPosition[]; tradeHistory: PaperTrade[]; stats?: PaperStats }) => {
       set({
         paperBalance: data.balance,
         positions: data.positions,
-        tradeHistory: data.tradeHistory
+        tradeHistory: data.tradeHistory,
+        paperStats: data.stats || get().paperStats
       });
     });
 
@@ -194,7 +197,8 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
         set({
           paperBalance: posData.balance !== undefined ? posData.balance : 100,
           positions: posData.positions || [],
-          tradeHistory: posData.tradeHistory || []
+          tradeHistory: posData.tradeHistory || [],
+          paperStats: posData.stats || get().paperStats
         });
       }
 

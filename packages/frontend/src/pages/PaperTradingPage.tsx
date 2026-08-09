@@ -18,6 +18,13 @@ import {
 } from 'lucide-react';
 import { formatPrice, formatTime, formatLatencyDelay } from '../utils/formatting';
 
+const StatBox: React.FC<{ label: string; value: string; accent: string }> = ({ label, value, accent }) => (
+  <div className="p-2.5 bg-chuchu-card/60 rounded-lg border border-chuchu-border">
+    <div className="text-[9px] text-chuchu-muted font-bold tracking-wider uppercase mb-1">{label}</div>
+    <div className={`text-sm font-black num-font ${accent}`}>{value}</div>
+  </div>
+);
+
 export const PaperTradingPage: React.FC = () => {
   const {
     states,
@@ -26,6 +33,7 @@ export const PaperTradingPage: React.FC = () => {
     paperBalance,
     positions,
     tradeHistory,
+    paperStats,
     submitOrder,
     closePosition,
     timezone,
@@ -362,6 +370,16 @@ export const PaperTradingPage: React.FC = () => {
                           ${pos.realizedPnL.toFixed(2)}
                         </div>
                       </div>
+                      <div>
+                        <div className="text-chuchu-muted text-[10px]">LEVERAGE</div>
+                        <div className="font-bold text-chuchu-text">{pos.leverage || 1}x</div>
+                      </div>
+                      <div>
+                        <div className="text-chuchu-muted text-[10px]">LIQUIDATION PRICE</div>
+                        <div className="font-bold text-rose-300">
+                          {pos.liquidationPrice !== undefined ? `$${formatPrice(pos.liquidationPrice)}` : '---'}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -465,6 +483,37 @@ export const PaperTradingPage: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* 500-Trade Evaluation Stats (net of real fees + funding) */}
+        {paperStats && (
+          <div className="bg-chuchu-bg/40 p-4 rounded-xl border border-chuchu-border">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <div className="flex items-center space-x-2">
+                <Trophy className="w-4 h-4 text-amber-400" />
+                <span className="text-[11px] font-black tracking-wider text-chuchu-text">
+                  500-TRADE STRATEGY EVALUATION
+                </span>
+              </div>
+              <div className={`text-[11px] font-black px-2 py-1 rounded border ${
+                paperStats.totalTrades >= 500
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-chuchu-cyan/10 text-chuchu-cyan border-chuchu-cyan/30'
+              }`}>
+                {paperStats.totalTrades} / 500 TRADES {paperStats.totalTrades >= 500 ? 'COMPLETE' : `(${paperStats.tradesToTarget} TO GO)`}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+              <StatBox label="WIN RATE (NET)" value={`${paperStats.winRate}%`} accent={paperStats.winRate >= 50 ? 'text-emerald-400' : 'text-rose-400'} />
+              <StatBox label="PROFIT FACTOR" value={paperStats.profitFactor.toFixed(2)} accent={paperStats.profitFactor >= 1 ? 'text-emerald-400' : 'text-rose-400'} />
+              <StatBox label="NET PNL" value={`$${paperStats.netPnl.toFixed(2)}`} accent={paperStats.netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+              <StatBox label="EXPECTANCY" value={`$${paperStats.expectancy.toFixed(2)}`} accent={paperStats.expectancy >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+              <StatBox label="AVG WIN" value={`$${paperStats.avgWin.toFixed(2)}`} accent="text-emerald-400" />
+              <StatBox label="AVG LOSS" value={`$${paperStats.avgLoss.toFixed(2)}`} accent="text-rose-400" />
+              <StatBox label="FEES PAID" value={`$${paperStats.totalFees.toFixed(2)}`} accent="text-amber-400" />
+              <StatBox label="MAX DRAWDOWN" value={`$${paperStats.maxDrawdown.toFixed(2)}`} accent="text-rose-400" />
+            </div>
+          </div>
+        )}
 
         {filteredHistory.length === 0 ? (
           <div className="py-8 text-center text-chuchu-muted text-xs">

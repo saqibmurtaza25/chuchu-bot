@@ -118,8 +118,13 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     res.json({
       balance: dataEngine.paperEngine.getBalance(),
       positions: dataEngine.paperEngine.getPositions(),
-      tradeHistory: dataEngine.paperEngine.getTradeHistory()
+      tradeHistory: dataEngine.paperEngine.getTradeHistory(),
+      stats: dataEngine.paperEngine.getStats()
     });
+  });
+
+  app.get('/api/v1/paper/stats', (req: Request, res: Response) => {
+    res.json({ stats: dataEngine.paperEngine.getStats() });
   });
 
   app.get('/api/v1/analytics', (req: Request, res: Response) => {
@@ -190,7 +195,8 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     io.emit('paper:update', {
       balance: dataEngine.paperEngine.getBalance(),
       positions: dataEngine.paperEngine.getPositions(),
-      tradeHistory: dataEngine.paperEngine.getTradeHistory()
+      tradeHistory: dataEngine.paperEngine.getTradeHistory(),
+      stats: dataEngine.paperEngine.getStats()
     });
     res.json({ success: true, balance: 100 });
   });
@@ -211,6 +217,7 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     if (!intent || !intent.symbol || !intent.side || !intent.quantity) {
       return res.status(400).json({ error: 'Invalid order intent payload schema' });
     }
+    if (!intent.leverage) intent.leverage = dataEngine.autoTradeConfig.leverage;
 
     const state = dataEngine.getSymbolState(intent.symbol);
     const lastPrice = state?.lastTick?.price || 50000;

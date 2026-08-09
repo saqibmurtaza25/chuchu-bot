@@ -172,7 +172,7 @@ export interface TradeContext {
   marketRegime?: string;
 }
 
-export type ExitReason = 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL' | 'SIGNAL_REVERSAL' | 'TIME_EXPIRED';
+export type ExitReason = 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL' | 'SIGNAL_REVERSAL' | 'TIME_EXPIRED' | 'LIQUIDATION';
 
 export interface AutoTradeConfig {
   mode: 'OFF' | 'SEMI_AUTO' | 'AUTO';
@@ -191,6 +191,7 @@ export interface PaperOrderIntent {
   price?: number;
   stopLoss?: number;
   takeProfit?: number;
+  leverage?: number;
   context?: TradeContext;
 }
 
@@ -203,6 +204,7 @@ export interface PaperTrade {
   quantity: number;
   slippagePct: number;
   fee: number;
+  fundingPaid?: number;
   timestamp: number;
   context?: TradeContext;
   exitReason?: ExitReason;
@@ -220,7 +222,38 @@ export interface PaperPosition {
   margin: number;
   stopLoss?: number;
   takeProfit?: number;
+  leverage?: number;
+  liquidationPrice?: number;
+  fundingPaid?: number;
+  entryFee?: number;
+  exitFee?: number;
+  openedAt?: number;
+  closedAt?: number;
+  lastFundingAccrualAt?: number;
   context?: TradeContext;
+}
+
+/**
+ * Round-trip performance stats used to judge the strategy (e.g. over 500 trades).
+ * Every number is net of real Binance fees + funding.
+ */
+export interface PaperStats {
+  totalTrades: number;       // closed round trips
+  wins: number;
+  losses: number;
+  winRate: number;           // %
+  profitFactor: number;
+  grossProfit: number;
+  grossLoss: number;
+  avgWin: number;
+  avgLoss: number;
+  expectancy: number;        // avg net PnL per trade
+  totalFees: number;
+  totalFunding: number;
+  maxDrawdown: number;
+  netPnl: number;
+  balance: number;
+  tradesToTarget: number;    // 500 - totalTrades
 }
 
 export interface AnalyticsMetrics {
