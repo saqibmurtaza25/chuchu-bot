@@ -309,6 +309,49 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     res.json({ success: true, balance: 100 });
   });
 
+  /**
+   * Reset ONLY the trade history — balance and open positions are preserved.
+   * History is never cleared by any backend process; only this explicit call.
+   */
+  app.post('/api/v1/reset/history', (req: Request, res: Response) => {
+    const before = dataEngine.paperEngine.getTradeHistory().length;
+    dataEngine.paperEngine.resetHistory();
+    const state: PersistedPaperState = {
+      version: 1,
+      savedAt: Date.now(),
+      balance: dataEngine.paperEngine.getBalance(),
+      positions: dataEngine.paperEngine.getPositions(),
+      trades: dataEngine.paperEngine.getTradeHistory(),
+      autoTradeConfig: dataEngine.autoTradeConfig
+    };
+    persistence.save(state);
+    io.emit('paper:update', {
+      balance: dataEngine.paperEngine.getBalance(),
+      positions: dataEngine.paperEngine.getPositions(),
+      tradeHistory: dataEngine.paperEngine.getTradeHistory(),
+      stats: dataEngine.paperEngine.getStats()
+    });
+    console.log(`StatePersistence: trade history cleared (${before} entries) — balance & positions kept`);
+    res.json({ success: true, clearedTrades: before });
+  });
+
+  /**
+   * Reset ONLY the demo balance back to $100 — trade history and open
+   * positions are preserved so today's analysis stays intact.
+   */
+  app.post('/api/v1/reset/balance', (req: Request, res: Response) => {
+    dataEngine.paperEngine.resetBalance(100);
+    persistNow();
+    io.emit('paper:update', {
+      balance: dataEngine.paperEngine.getBalance(),
+      positions: dataEngine.paperEngine.getPositions(),
+      tradeHistory: dataEngine.paperEngine.getTradeHistory(),
+      stats: dataEngine.paperEngine.getStats()
+    });
+    console.log('StatePersistence: demo balance reset to $100 (history + positions kept)');
+    res.json({ success: true, balance: 100 });
+  });
+
   app.get('/api/v1/focus', (req: Request, res: Response) => {
     res.json({ symbol: dataEngine.focusedSymbol });
   });

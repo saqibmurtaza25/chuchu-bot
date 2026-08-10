@@ -44,6 +44,23 @@ export class PaperTradingEngine {
     this.trades = [];
   }
 
+  /**
+   * Clears ONLY the trade history. Balance and open positions are untouched —
+   * used when the user wants to start analysis fresh without losing their
+   * running demo balance or any open trades.
+   */
+  public resetHistory(): void {
+    this.trades = [];
+  }
+
+  /**
+   * Resets ONLY the demo balance. Trade history and open positions are kept,
+   * so past trades remain available for analysis.
+   */
+  public resetBalance(initialBalance: number = 100): void {
+    this.balance = initialBalance;
+  }
+
   public getPositions(): PaperPosition[] {
     return Array.from(this.positions.values());
   }

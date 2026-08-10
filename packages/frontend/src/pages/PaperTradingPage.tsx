@@ -38,7 +38,8 @@ export const PaperTradingPage: React.FC = () => {
     submitOrder,
     closePosition,
     timezone,
-    resetPaperAccount,
+    resetTradeHistory,
+    resetDemoBalance,
     serverUrl
   } = useChuchuStore();
 
@@ -120,7 +121,7 @@ export const PaperTradingPage: React.FC = () => {
             Simulated order execution against live Binance L2 orderbook depth with dynamic slippage &amp; fee model
           </p>
           <p className="text-[10px] text-chuchu-yellow/70 mt-0.5 font-bold">
-            AUTO-SAVED — balance, open positions &amp; full history continue after restart. Reset only clears when you press RESET.
+            AUTO-SAVED — trade history, balance &amp; positions survive every backend restart. History is NEVER auto-cleared; it only changes when you press RESET HISTORY / RESET BALANCE.
           </p>
         </div>
 
@@ -133,17 +134,43 @@ export const PaperTradingPage: React.FC = () => {
             </span>
           </div>
 
-          <button
-            onClick={() => {
-              if (window.confirm("Are you sure you want to reset your paper trading balance to $100, clear active positions and delete all trade history?")) {
-                resetPaperAccount();
-              }
-            }}
-            className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-rose-500/10 text-rose-300 text-xs font-bold border border-rose-500/30 hover:bg-rose-500/20 transition-all duration-150 shrink-0"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>RESET</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => {
+                const count = tradeHistory.length;
+                const warning =
+                  `⚠️ WARNING — THIS CANNOT BE UNDONE\n\n` +
+                  `You are about to DELETE the ENTIRE trade history (${count} records).\n\n` +
+                  `Balance and open positions will NOT be touched, but all past trades,\n` +
+                  `exit reasons, P&L and analysis data will be permanently removed from the server.\n\n` +
+                  `Type CONFIRM to proceed with the deletion.`;
+                const answer = window.prompt(warning);
+                if (answer && answer.trim().toUpperCase() === 'CONFIRM') {
+                  resetTradeHistory();
+                } else if (answer !== null) {
+                  alert('Reset cancelled — history is safe.');
+                }
+              }}
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-rose-500/10 text-rose-300 text-xs font-bold border border-rose-500/30 hover:bg-rose-500/20 transition-all duration-150 shrink-0"
+              title="Delete trade history only (keeps balance & positions)"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>RESET HISTORY</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (window.confirm("Reset DEMO BALANCE to $100? Trade history and open positions are kept.")) {
+                  resetDemoBalance();
+                }
+              }}
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-amber-500/10 text-amber-300 text-xs font-bold border border-amber-500/30 hover:bg-amber-500/20 transition-all duration-150 shrink-0"
+              title="Reset demo dollars to $100 (keeps history & positions)"
+            >
+              <DollarSign className="w-3.5 h-3.5" />
+              <span>RESET BALANCE</span>
+            </button>
+          </div>
 
           <div className="flex items-center space-x-2 bg-chuchu-card px-3 py-2 rounded-lg border border-chuchu-border">
             <Activity className="w-4 h-4 text-chuchu-cyan" />

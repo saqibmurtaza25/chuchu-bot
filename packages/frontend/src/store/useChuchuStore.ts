@@ -44,6 +44,8 @@ interface ChuchuState {
   fetchStateSnapshots: () => Promise<void>;
   fetchPipeline: () => Promise<void>;
   resetPaperAccount: () => Promise<void>;
+  resetTradeHistory: () => Promise<void>;
+  resetDemoBalance: () => Promise<void>;
   focusedSymbol: string | null;
   setFocusedSymbol: (symbol: string | null) => Promise<void>;
 }
@@ -334,6 +336,34 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
       }
     } catch (err) {
       console.error('Reset paper account failed:', err);
+    }
+  },
+
+  // Clears ONLY trade history — balance + open positions preserved
+  resetTradeHistory: async () => {
+    try {
+      const url = get().serverUrl;
+      const res = await fetch(`${url}/api/v1/reset/history`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        set({ tradeHistory: [] });
+      }
+    } catch (err) {
+      console.error('Reset trade history failed:', err);
+    }
+  },
+
+  // Resets ONLY demo dollars to $100 — history + positions preserved
+  resetDemoBalance: async () => {
+    try {
+      const url = get().serverUrl;
+      const res = await fetch(`${url}/api/v1/reset/balance`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        set({ paperBalance: data.balance });
+      }
+    } catch (err) {
+      console.error('Reset demo balance failed:', err);
     }
   },
 
