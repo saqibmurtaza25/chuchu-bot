@@ -202,6 +202,42 @@ export const SettingsPage: React.FC = () => {
               <option value="3">3% Risk</option>
             </select>
           </div>
+
+          <div className="space-y-2">
+            <label className="text-chuchu-muted font-bold block uppercase text-[10px]">RE-ENTRY COOLDOWN (AFTER A WIN/LOSS CLOSE)</label>
+            <select
+              value={autoTradeConfig.reentryCooldownMin}
+              onChange={(e) => handleAutoTradeChange('reentryCooldownMin', Number(e.target.value))}
+              className="w-full px-3 py-2 bg-chuchu-bg border border-chuchu-border rounded text-chuchu-text font-bold focus:outline-none focus:border-chuchu-cyan"
+            >
+              <option value="0">0 min (instant re-entry)</option>
+              <option value="3">3 min</option>
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+              <option value="15">15 min</option>
+            </select>
+            <p className="text-chuchu-muted text-[10px]">Same coin dobara trade tabhi hoga jab cooldown khatam + woh phir se qualify kare.</p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-chuchu-muted font-bold block uppercase text-[10px]">HIGHER-TIMEFRAME TREND FILTER (WIN-RATE BOOSTER)</label>
+            <div className="flex items-center justify-between bg-chuchu-bg border border-chuchu-border rounded px-3 py-2">
+              <span className="text-chuchu-text font-bold text-[11px]">
+                {autoTradeConfig.htfTrendFilter ? 'ON — sirf 1h/4h trend ke direction me trades' : 'OFF — counter-trend trades allowed'}
+              </span>
+              <button
+                onClick={() => handleAutoTradeChange('htfTrendFilter', !autoTradeConfig.htfTrendFilter)}
+                className={`px-3 py-1.5 rounded-md text-[10px] font-black border transition-all ${
+                  autoTradeConfig.htfTrendFilter
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'bg-chuchu-card text-chuchu-muted border-chuchu-border'
+                }`}
+              >
+                {autoTradeConfig.htfTrendFilter ? 'ON' : 'OFF'}
+              </button>
+            </div>
+            <p className="text-chuchu-muted text-[10px]">Counter-trend scalps low win rate ka sabse bada reason hain. Is filter se win rate boost hota hai.</p>
+          </div>
         </div>
 
         {/* Trailing Stop */}

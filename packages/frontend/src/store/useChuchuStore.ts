@@ -107,7 +107,9 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
     minRiskReward: 1.5,
     trailingStopEnabled: true,
     trailingActivationPct: 40,
-    trailingDistancePct: 0.6
+    trailingDistancePct: 0.6,
+    reentryCooldownMin: 5,
+    htfTrendFilter: true
   },
 
   exchangeStatus: null,

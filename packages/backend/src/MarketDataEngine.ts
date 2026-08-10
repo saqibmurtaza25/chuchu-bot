@@ -263,8 +263,16 @@ export class MarketDataEngine {
     minRiskReward: 1.5,
     trailingStopEnabled: true,
     trailingActivationPct: 40,
-    trailingDistancePct: 0.6
+    trailingDistancePct: 0.6,
+    reentryCooldownMin: 5,
+    htfTrendFilter: true
   };
+
+  private lastTradeExitAt: Map<string, number> = new Map();
+
+  public markTradeExit(symbol: string): void {
+    this.lastTradeExitAt.set(symbol, Date.now());
+  }
 
   public applyTrailingConfig(): void {
     this.paperEngine.setTrailingConfig(
@@ -443,6 +451,7 @@ export class MarketDataEngine {
     const closedTrade = this.paperEngine.updateMarkPrice(tick.symbol, tick.price, state.fundingRate);
     if (closedTrade) {
       console.log(`MarketDataEngine: Auto-TP/SL/LIQ closed position for ${tick.symbol} at $${tick.price}`);
+      this.markTradeExit(tick.symbol);
       this.emitTrade(closedTrade);
     }
 
@@ -570,7 +579,8 @@ export class MarketDataEngine {
       state.microstructure,
       state.regime,
       state.hunter,
-      this.autoTradeConfig.minSetupQuality
+      this.autoTradeConfig.minSetupQuality,
+      this.autoTradeConfig.htfTrendFilter
     );
     state.signal = signal;
     state.reasons = signal.reasons;
@@ -647,12 +657,20 @@ export class MarketDataEngine {
       // Smart-money filter: only enter setups that meet the minimum risk:reward
       const minRR = this.autoTradeConfig.minRiskReward || 1.5;
       const rr = signal.riskRewardRatio || 0;
+
+      // Re-entry cooldown: after a win/loss closes, the same coin must
+      // re-qualify and wait out the cooldown before it can be traded again.
+      const cooldownMs = (this.autoTradeConfig.reentryCooldownMin || 0) * 60 * 1000;
+      const lastExit = this.lastTradeExitAt.get(symbol) || 0;
+      const cooldownLeftMs = cooldownMs > 0 ? cooldownMs - (Date.now() - lastExit) : 0;
       
       // Constraint: Check Max Open Trades Limit
       if (activePositions.length < this.autoTradeConfig.maxOpenTrades && !activePositions.some(p => p.symbol === symbol)) {
         const config = this.autoTradeConfig;
         
-        if (rr < minRR) {
+        if (cooldownLeftMs > 0) {
+          console.log(`MarketDataEngine: ${symbol} in cooldown (${(cooldownLeftMs / 1000).toFixed(0)}s left) — skipping re-entry`);
+        } else if (rr < minRR) {
           console.log(`MarketDataEngine: Skipping ${symbol} — R:R ${rr.toFixed(2)} < ${minRR.toFixed(2)}`);
         } else {
           // Calculate target quantity using margin and leverage

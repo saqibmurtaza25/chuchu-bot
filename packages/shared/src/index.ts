@@ -188,6 +188,8 @@ export interface AutoTradeConfig {
   trailingStopEnabled: boolean;
   trailingActivationPct: number;
   trailingDistancePct: number;
+  reentryCooldownMin: number;
+  htfTrendFilter: boolean;
 }
 
 export interface PaperOrderIntent {

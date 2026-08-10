@@ -318,6 +318,10 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     const lastPrice = state?.lastTick?.price || 50000;
     const trade = dataEngine.paperEngine.executeOrder(intent, state?.depth, lastPrice);
 
+    // If this manual order closed out the position, start the re-entry cooldown
+    const remaining = dataEngine.paperEngine.getPositions().some(p => p.symbol === intent.symbol);
+    if (!remaining) dataEngine.markTradeExit(intent.symbol);
+
     io.emit('trade:executed', trade);
     persistNow();
     res.json({ success: true, trade });

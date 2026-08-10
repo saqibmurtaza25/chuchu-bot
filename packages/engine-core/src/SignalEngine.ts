@@ -16,7 +16,8 @@ export class SignalEngine {
     microstructure?: MicrostructureState | null,
     regime?: MarketRegimeState | null,
     hunter?: HunterState | null,
-    minSetupQuality: number = 75
+    minSetupQuality: number = 75,
+    htfTrendFilter: boolean = false
   ): SignalResult {
 
     const reasons: string[] = [];
@@ -174,6 +175,22 @@ export class SignalEngine {
         signal = isShortSetup ? 'SELL' : 'BUY';
       } else {
         signal = isShortSetup ? 'BUY' : 'SELL';
+      }
+    }
+
+    // HTF (Higher-Timeframe) Trend Filter — hard gate that only allows entries
+    // aligned with the 1h/4h RSI bias. Counter-trend scalps are the #1 cause of
+    // low win rate, so this blocks them instead of just penalising them.
+    if (htfTrendFilter && signal !== 'NEUTRAL') {
+      const rsi1h = indicators?.rsiMultiTimeframe?.tf1h ?? 50;
+      const rsi4h = indicators?.rsiMultiTimeframe?.tf4h ?? 50;
+      const htfRsi = (rsi1h + rsi4h) / 2;
+      if (signal === 'BUY' && htfRsi < 48) {
+        signal = 'NEUTRAL';
+        reasons.push(`HTF Filter: BUY blocked (1h/4h RSI ${htfRsi.toFixed(1)} < 48 — bearish bias)`);
+      } else if (signal === 'SELL' && htfRsi > 52) {
+        signal = 'NEUTRAL';
+        reasons.push(`HTF Filter: SELL blocked (1h/4h RSI ${htfRsi.toFixed(1)} > 52 — bullish bias)`);
       }
     }
 
