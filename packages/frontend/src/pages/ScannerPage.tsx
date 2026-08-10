@@ -19,6 +19,7 @@ const LIFECYCLE_STYLES: Record<CandidateLifecycle, string> = {
   QUALIFIED:  'bg-cyan-500/15 text-cyan-300 border-chuchu-cyan/50',
   SIGNAL:     'bg-emerald-500/20 text-emerald-300 border-emerald-400/60 animate-pulse',
   OPEN_TRADE: 'bg-yellow-500/20 text-yellow-300 border-yellow-400/60 animate-pulse',
+  REQUALIFY:  'bg-rose-500/20 text-rose-300 border-rose-500/60 animate-pulse',
   CLOSED:     'bg-slate-600/50 text-slate-400 border-slate-600/40',
 };
 

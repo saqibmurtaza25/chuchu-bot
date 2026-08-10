@@ -279,8 +279,31 @@ export class MarketDataEngine {
 
   private lastTradeExitAt: Map<string, number> = new Map();
 
+  /**
+   * Symbols whose trade just closed are REMOVED from the execution list and must
+   * be re-processed from the very start of the discovery pipeline (Stage 1 →
+   * Stage 2 heat → Stage 4 signal) before they can be traded again. Time does
+   * not matter — the full re-qualification process does.
+   * key: symbol, value: timestamp the re-qualification was started.
+   */
+  private requalifyBlock = new Map<string, number>();
+
+  /**
+   * Called on EVERY position close (auto TP/SL/LIQ/trailing/momentum or manual).
+   * Strips the coin back to the discovery stage: clears its lingering signal and
+   * forces it to re-qualify through the pipeline before any re-entry.
+   */
   public markTradeExit(symbol: string): void {
     this.lastTradeExitAt.set(symbol, Date.now());
+    this.requalifyBlock.set(symbol, Date.now());
+
+    const state = this.symbolStates.get(symbol);
+    if (state) {
+      state.signal = undefined;
+      state.reasons = [];
+      state.lifecycle = 'REQUALIFY';
+    }
+    console.log(`MarketDataEngine: ${symbol} trade closed → REMOVED from execution list, full re-qualification started`);
   }
 
   public applyTrailingConfig(): void {
@@ -733,6 +756,10 @@ export class MarketDataEngine {
     const hasOpenPosition = this.paperEngine.getPositions().some(p => p.symbol === symbol);
     if (hasOpenPosition) {
       state.lifecycle = 'OPEN_TRADE';
+    } else if (this.requalifyBlock.has(symbol)) {
+      // Trade just closed — coin is removed from execution list and must
+      // re-qualify through the full pipeline before it can be traded again.
+      state.lifecycle = 'REQUALIFY';
     } else if (signal.signal !== 'NEUTRAL') {
       state.lifecycle = 'SIGNAL';
     } else if (hunterScore >= 75) {
@@ -793,7 +820,12 @@ export class MarketDataEngine {
       if (activePositions.length < this.autoTradeConfig.maxOpenTrades && !activePositions.some(p => p.symbol === symbol)) {
         const config = this.autoTradeConfig;
         
-        if (cooldownLeftMs > 0) {
+        if (this.requalifyBlock.has(symbol)) {
+          // HARD GATE: coin just closed — it must be re-processed from the
+          // start (Stage1 discovery → Stage2 heat → Stage4 signal) and only
+          // then re-entered. No logging per tick; transition is logged at
+          // block start (markTradeExit) and at clear (pipeline requalify).
+        } else if (cooldownLeftMs > 0) {
           console.log(`MarketDataEngine: ${symbol} in cooldown (${(cooldownLeftMs / 1000).toFixed(0)}s left) — skipping re-entry`);
         } else if (rr < minRR) {
           console.log(`MarketDataEngine: Skipping ${symbol} — R:R ${rr.toFixed(2)} < ${minRR.toFixed(2)}`);
@@ -1137,6 +1169,37 @@ export class MarketDataEngine {
         // One-time REST backfill of MTF kline history so the live WS-based
         // RSI/W%R(200) matrix is accurate immediately (then WS keeps it fresh).
         this.seedMtfHistories(wsSymbols);
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // RE-QUALIFICATION PASS
+      // Any symbol that closed a trade is blocked until THIS fresh pipeline
+      // cycle re-processes it end-to-end: it must appear in Stage 1 discovery,
+      // pass Stage 2 heat confirmation, produce a Stage 4 signal, AND the
+      // minimum cooldown must have elapsed. Only then does it re-enter the
+      // execution list. Time does not matter — the process does.
+      // ─────────────────────────────────────────────────────────────
+      if (this.requalifyBlock.size > 0) {
+        const cooldownMs = (this.autoTradeConfig.reentryCooldownMin || 0) * 60 * 1000;
+        const stage1Symbols = new Set(discovered.map(c => c.symbol));
+        const heatConfirmed = new Set(heatCandidates.filter(c => c.heatConfirmed).map(c => c.symbol));
+        const freshSignalSymbols = new Set(finalSignals.map(s => s.symbol));
+
+        for (const [symbol, exitAt] of Array.from(this.requalifyBlock.entries())) {
+          const cooldownElapsed = cooldownMs <= 0 || (Date.now() - exitAt) >= cooldownMs;
+          if (cooldownElapsed && stage1Symbols.has(symbol) && heatConfirmed.has(symbol) && freshSignalSymbols.has(symbol)) {
+            this.requalifyBlock.delete(symbol);
+            const rState = this.symbolStates.get(symbol);
+            if (rState) rState.lifecycle = undefined;
+            console.log(`MarketDataEngine: ${symbol} RE-QUALIFIED through full pipeline (Stage1 + heat + fresh signal) → back on execution list`);
+          } else {
+            const why = !cooldownElapsed ? 'cooldown not elapsed'
+              : !stage1Symbols.has(symbol) ? 'missing from Stage1 discovery'
+                : !heatConfirmed.has(symbol) ? 'failed Stage2 heat confirmation'
+                  : 'no fresh Stage4 signal';
+            console.log(`MarketDataEngine: ${symbol} still blocked — re-qualification pending (${why})`);
+          }
+        }
       }
 
       // Calculate dynamic next interval. 30s default reduces REST load ~3x;

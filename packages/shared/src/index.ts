@@ -290,6 +290,7 @@ export type CandidateLifecycle =
   | 'QUALIFIED'
   | 'SIGNAL'
   | 'OPEN_TRADE'
+  | 'REQUALIFY'
   | 'CLOSED';
 
 export interface AggregatedSymbolState {
