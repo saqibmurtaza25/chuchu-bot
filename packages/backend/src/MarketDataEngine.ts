@@ -34,6 +34,7 @@ import {
 import { RESTManager } from './RESTManager';
 import { WebSocketManager } from './WebSocketManager';
 import { BinanceFuturesExecutor } from './BinanceFuturesExecutor';
+import { BybitDataClient } from './BybitDataClient';
 
 export type StateListener = (state: AggregatedSymbolState) => void;
 export type TradeListener = (trade: PaperTrade) => void;
@@ -75,6 +76,7 @@ export class MarketDataEngine {
   public priorityQueueEngine = new PriorityQueueEngine();
 
   public restManager: RESTManager;
+  public bybitData: BybitDataClient;
   public wsManager: WebSocketManager | null = null; // futures depth
   public spotWs: WebSocketManager | null = null;   // spot trades + klines
   private pollIntervalTimer: NodeJS.Timeout | null = null;
@@ -148,7 +150,11 @@ export class MarketDataEngine {
 
     this.mtfBackfillInFlight.add(key);
     try {
-      const klines = await this.restManager.getKlines(symbol, tf, 250);
+      let klines = await this.restManager.getKlines(symbol, tf, 250);
+      if (klines.length === 0 && this.bybitData) {
+        // Binance REST busy/429 → Bybit is a fast independent fallback
+        klines = await this.bybitData.getKlines(symbol, tf, 250);
+      }
       if (klines.length > 0) {
         let tfMap = this.mtfKlineHistory.get(symbol);
         if (!tfMap) {
@@ -296,6 +302,7 @@ export class MarketDataEngine {
   constructor(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']) {
     this.symbols = symbols;
     this.restManager = new RESTManager();
+    this.bybitData = new BybitDataClient();
 
     for (const sym of this.symbols) {
       this.symbolStates.set(sym, {
@@ -528,9 +535,16 @@ export class MarketDataEngine {
         const staleMs = state ? Date.now() - state.timestamp : Infinity;
 
         // Stale or missing feed → force-refresh the price so the open trade is
-        // never sitting on a frozen mark price.
+        // never sitting on a frozen mark price. Bybit is tried first (fast,
+        // separate rate-limit budget from Binance), Binance as fallback.
         if (!state || staleMs > 3000) {
-          const price = await this.restManager.getTickerPrice(pos.symbol);
+          let price: number | null = null;
+          if (this.bybitData) {
+            price = await this.bybitData.getTickerPrice(pos.symbol);
+          }
+          if (!price) {
+            price = await this.restManager.getTickerPrice(pos.symbol);
+          }
           if (price && price > 0) {
             const tick: MarketTick = {
               symbol: pos.symbol,

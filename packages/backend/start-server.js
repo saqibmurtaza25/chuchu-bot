@@ -1,3 +1,10 @@
+try {
+  // Load local .env (API keys etc.) if present — optional, never required.
+  process.loadEnvFile('./.env');
+} catch (_) {
+  // .env is optional (keys can come from the environment instead)
+}
+
 const { createServer } = require('./dist/backend/src/server');
 
 async function main() {

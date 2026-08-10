@@ -162,6 +162,19 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     res.json({ stats: dataEngine.paperEngine.getStats() });
   });
 
+  app.get('/api/v1/bybit/status', async (req: Request, res: Response) => {
+    const client = dataEngine.bybitData;
+    const result = await client.ping();
+    res.json({
+      configured: client.isConfigured(),
+      reachable: result.reachable,
+      latencyMs: result.latencyMs,
+      authValid: result.authValid,
+      // Exposed symbols only — never the key/secret
+      baseUrl: process.env.BYBIT_BASE_URL || 'https://api.bybit.com'
+    });
+  });
+
   app.get('/api/v1/analytics', (req: Request, res: Response) => {
     const metrics = dataEngine.analyticsEngine.evaluate(dataEngine.paperEngine.getTradeHistory());
     res.json({ metrics });
