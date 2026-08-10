@@ -3,6 +3,7 @@ import express, { Request, Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import { MarketDataEngine } from './MarketDataEngine';
 import { PaperOrderIntent } from '@chuchu/shared';
+import { StatePersistence, PersistedPaperState } from './StatePersistence';
 
 export interface ServerApp {
   app: express.Application;
@@ -31,6 +32,39 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
   });
 
   const dataEngine = new MarketDataEngine(symbols);
+
+  // ─────────────────────────────────────────────────────────────
+  // PERSISTENCE — paper balance, open positions, full trade history
+  // and auto-trade config survive restarts. Only /api/v1/reset clears.
+  // ─────────────────────────────────────────────────────────────
+  const persistence = new StatePersistence();
+  const savedState = persistence.load();
+  if (savedState) {
+    dataEngine.paperEngine.restoreState({
+      balance: savedState.balance,
+      positions: savedState.positions,
+      trades: savedState.trades
+    });
+    if (savedState.autoTradeConfig) {
+      dataEngine.autoTradeConfig = { ...dataEngine.autoTradeConfig, ...savedState.autoTradeConfig };
+      dataEngine.applyTrailingConfig();
+    }
+    console.log(`StatePersistence: restored balance=$${dataEngine.paperEngine.getBalance().toFixed(2)} positions=${dataEngine.paperEngine.getPositions().length} trades=${dataEngine.paperEngine.getTradeHistory().length} from ${persistence.getFilePath()}`);
+  } else {
+    console.log(`StatePersistence: no state file at ${persistence.getFilePath()} — starting fresh ($100 paper demo)`);
+  }
+
+  const persistNow = (): void => {
+    const state: PersistedPaperState = {
+      version: 1,
+      savedAt: Date.now(),
+      balance: dataEngine.paperEngine.getBalance(),
+      positions: dataEngine.paperEngine.getPositions(),
+      trades: dataEngine.paperEngine.getTradeHistory(),
+      autoTradeConfig: dataEngine.autoTradeConfig
+    };
+    persistence.save(state);
+  };
 
   // ─────────────────────────────────────────────────────────────
   // Throttled Socket.io broadcasting
@@ -72,6 +106,7 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
   dataEngine.onTrade(() => {
     paperDirty = true;
     emitPaperUpdate();
+    persistNow();
   });
 
   // Broadcast trade executions (both manual and auto-executed/TP-SL closed) over Socket.io
@@ -187,8 +222,42 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     if (config) {
       dataEngine.autoTradeConfig = { ...dataEngine.autoTradeConfig, ...config };
       dataEngine.applyTrailingConfig();
+      persistNow();
     }
     res.json({ success: true, config: dataEngine.autoTradeConfig });
+  });
+
+  // ── Trade history CSV export ─────────────────────────────────
+  app.get('/api/v1/history/csv', (req: Request, res: Response) => {
+    const trades = dataEngine.paperEngine.getTradeHistory();
+    const header = ['timestamp', 'tradeId', 'symbol', 'side', 'fillPrice', 'quantity', 'notional', 'slippagePct', 'fee', 'fundingPaid', 'exitReason', 'netPnl', 'setupQuality', 'hunterScore', 'rsi', 'wmr', 'leverage'];
+    const rows = trades.map((t) => {
+      const ctx = t.context || {};
+      return [
+        new Date(t.timestamp).toISOString(),
+        t.tradeId,
+        t.symbol,
+        t.side,
+        t.fillPrice,
+        t.quantity,
+        (t.fillPrice * t.quantity).toFixed(4),
+        t.slippagePct ?? 0,
+        t.fee ?? 0,
+        t.fundingPaid ?? 0,
+        t.exitReason || '',
+        t.pnl ?? '',
+        ctx.setupQuality ?? '',
+        ctx.hunterScore ?? '',
+        ctx.rsi ?? '',
+        ctx.wmr ?? '',
+        dataEngine.autoTradeConfig.leverage
+      ];
+    });
+    const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const csv = [header.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="chuchu-trade-history-${Date.now()}.csv"`);
+    res.send(csv);
   });
 
   // ── Real Binance account integration ──────────────────────────────
@@ -223,6 +292,7 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
       tradeHistory: dataEngine.paperEngine.getTradeHistory(),
       stats: dataEngine.paperEngine.getStats()
     });
+    persistNow();
     res.json({ success: true, balance: 100 });
   });
 
@@ -249,12 +319,16 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     const trade = dataEngine.paperEngine.executeOrder(intent, state?.depth, lastPrice);
 
     io.emit('trade:executed', trade);
+    persistNow();
     res.json({ success: true, trade });
   });
 
   const start = async (port: number = 8080): Promise<void> => {
     await dataEngine.initialize();
     dataEngine.startWebsocket();
+
+    // Periodic autosave — catches funding accrual / balance drift between trades.
+    setInterval(() => persistNow(), 20000);
 
     // Broadcast system time and exact API latency to the frontend every 3 seconds
     setInterval(async () => {

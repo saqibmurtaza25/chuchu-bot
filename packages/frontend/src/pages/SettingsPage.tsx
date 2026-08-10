@@ -8,6 +8,7 @@ export const SettingsPage: React.FC = () => {
     connect,
     autoTradeConfig,
     setAutoTradeConfig,
+    fetchAutoTradeConfig,
     exchangeStatus,
     fetchExchangeStatus,
     saveExchangeKeys,
@@ -20,7 +21,8 @@ export const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     fetchExchangeStatus();
-  }, [fetchExchangeStatus]);
+    fetchAutoTradeConfig();
+  }, [fetchExchangeStatus, fetchAutoTradeConfig]);
 
   const handleSave = () => {
     connect(urlInput);

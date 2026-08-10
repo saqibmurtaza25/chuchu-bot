@@ -57,6 +57,34 @@ export class PaperTradingEngine {
   }
 
   /**
+   * Full engine state snapshot — used to persist paper balance, open positions
+   * and full trade history to disk so nothing resets on restart.
+   */
+  public getStateSnapshot(): { balance: number; positions: PaperPosition[]; trades: PaperTrade[] } {
+    return {
+      balance: this.balance,
+      positions: this.getPositions(),
+      trades: this.trades
+    };
+  }
+
+  public restoreState(snapshot: { balance: number; positions: PaperPosition[]; trades: PaperTrade[] }): void {
+    if (!snapshot) return;
+    if (typeof snapshot.balance === 'number' && isFinite(snapshot.balance)) {
+      this.balance = snapshot.balance;
+    }
+    if (Array.isArray(snapshot.trades)) {
+      this.trades = snapshot.trades;
+    }
+    if (Array.isArray(snapshot.positions)) {
+      this.positions.clear();
+      for (const p of snapshot.positions) {
+        if (p && p.symbol) this.positions.set(p.symbol, p);
+      }
+    }
+  }
+
+  /**
    * Full round-trip stats — the exact numbers used to judge the strategy after
    * 500 trades. PnL is net of entry + exit fees and funding.
    */

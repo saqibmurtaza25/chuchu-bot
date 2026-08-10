@@ -14,7 +14,8 @@ import {
   Calendar,
   PieChart,
   Trophy,
-  RefreshCw
+  RefreshCw,
+  Download
 } from 'lucide-react';
 import { formatPrice, formatTime, formatLatencyDelay } from '../utils/formatting';
 
@@ -37,13 +38,31 @@ export const PaperTradingPage: React.FC = () => {
     submitOrder,
     closePosition,
     timezone,
-    resetPaperAccount
+    resetPaperAccount,
+    serverUrl
   } = useChuchuStore();
 
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
   const [quantity, setQuantity] = useState<number>(1.0);
   const [historyTab, setHistoryTab] = useState<'CARDS' | 'TABLE'>('CARDS');
   const [timeFilter, setTimeFilter] = useState<'TODAY' | 'YESTERDAY' | 'WEEK' | 'MONTH' | 'ALL'>('TODAY');
+
+  const handleDownloadCsv = async () => {
+    try {
+      const res = await fetch(`${serverUrl}/api/v1/history/csv`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `chuchu-trade-history-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('CSV download failed:', err);
+    }
+  };
 
   const symbolList = Array.from(states.keys());
   const activeState = states.get(selectedSymbol);
@@ -98,7 +117,10 @@ export const PaperTradingPage: React.FC = () => {
             <span>INSTITUTIONAL PAPER EXECUTION TERMINAL</span>
           </h1>
           <p className="text-xs text-chuchu-muted mt-0.5 font-medium">
-            Simulated order execution against live Binance L2 orderbook depth with dynamic slippage & fee model
+            Simulated order execution against live Binance L2 orderbook depth with dynamic slippage &amp; fee model
+          </p>
+          <p className="text-[10px] text-chuchu-yellow/70 mt-0.5 font-bold">
+            AUTO-SAVED — balance, open positions &amp; full history continue after restart. Reset only clears when you press RESET.
           </p>
         </div>
 
@@ -440,6 +462,15 @@ export const PaperTradingPage: React.FC = () => {
               COMPACT TABLE
             </button>
           </div>
+
+          <button
+            onClick={handleDownloadCsv}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 text-[10px] font-black transition-all"
+            title="Download full trade history as CSV"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>DOWNLOAD CSV</span>
+          </button>
         </div>
 
         {/* KPI Banner */}

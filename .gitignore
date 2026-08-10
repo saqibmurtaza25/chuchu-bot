@@ -34,3 +34,6 @@ Thumbs.db
 # Coverage / Testing
 coverage/
 .nyc_output/
+
+# Runtime paper-trading state (auto-saved; do not commit)
+packages/backend/chuchu-state.json

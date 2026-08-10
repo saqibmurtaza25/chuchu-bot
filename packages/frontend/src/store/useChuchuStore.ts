@@ -30,6 +30,7 @@ interface ChuchuState {
 
   autoTradeConfig: AutoTradeConfig;
   setAutoTradeConfig: (config: Partial<AutoTradeConfig>) => Promise<void>;
+  fetchAutoTradeConfig: () => Promise<void>;
 
   exchangeStatus: { configured: boolean; balanceUsdt: number; source: string | null; error?: string } | null;
   fetchExchangeStatus: () => Promise<void>;
@@ -158,6 +159,16 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
       });
     } catch (err) {
       console.error('Failed to sync AutoTrade config:', err);
+    }
+  },
+
+  fetchAutoTradeConfig: async () => {
+    try {
+      const res = await fetch(`${get().serverUrl}/api/v1/autotrade/config`);
+      const data = await res.json();
+      if (data && data.config) set({ autoTradeConfig: data.config });
+    } catch (err) {
+      console.error('Failed to fetch auto-trade config:', err);
     }
   },
 
