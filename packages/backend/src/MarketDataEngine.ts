@@ -9,8 +9,10 @@ import {
   HeatCandidate,
   PrioritizedCandidate,
   PaperTrade,
+  PaperPosition,
   PaperOrderIntent,
-  AutoTradeConfig
+  AutoTradeConfig,
+  ExitReason
 } from '@chuchu/shared';
 
 import {
@@ -77,6 +79,7 @@ export class MarketDataEngine {
   public spotWs: WebSocketManager | null = null;   // spot trades + klines
   private pollIntervalTimer: NodeJS.Timeout | null = null;
   private discoveryTimer: NodeJS.Timeout | null = null;
+  private positionPriorityTimer: NodeJS.Timeout | null = null;
   private isPollingDerivatives = false;
 
   // ─────────────────────────────────────────────────────────────
@@ -364,6 +367,11 @@ export class MarketDataEngine {
     // Start periodic polling for derivatives (Funding, OI, MTF RSIs & MTF W%R 200 updates)
     this.pollIntervalTimer = setInterval(() => this.pollDerivativesData(), ScreenerConfig.intervals.derivativesPoll);
 
+    // Priority loop: every open position gets its own 1-second focus — fresh
+    // price (REST fallback if WS is stale) + momentum-based exit evaluation.
+    // Where money is at risk is where the data + compute go.
+    this.positionPriorityTimer = setInterval(() => this.priorityPositionLoop(), 1000);
+
     // Start Stage 1 discovery pipeline — loads listing dates once, then runs dynamically
     await this.discoveryEngine.loadListingDates();
     this.runDiscoveryPipeline(); // run immediately and it will self-schedule
@@ -455,6 +463,12 @@ export class MarketDataEngine {
       this.emitTrade(closedTrade);
     }
 
+    // Momentum-based exit on live ticks — each open trade is tracked isolated
+    const openPos = this.paperEngine.getPositions().find(p => p.symbol === tick.symbol);
+    if (openPos) {
+      this.evaluateMomentumExit(tick.symbol, state, openPos);
+    }
+
     // Live rolling CVD delta — once per aggTrade, never double-counted
     this.orderbookEngine.updateCVD(tick);
 
@@ -495,6 +509,103 @@ export class MarketDataEngine {
 
     this.evaluateSignals(tick.symbol);
     this.notifyListeners(state);
+  }
+
+  /**
+   * Priority loop (runs every 1s). Open positions get full focus:
+   *  - If a position's price feed is stale (>3s), fetch a fresh price via REST
+   *    so mark price never sticks while money is at risk.
+   *  - Momentum-based exit is evaluated every second for every open position.
+   *  - The rest of the market (scanning) runs on the normal cadence, NOT here.
+   */
+  private async priorityPositionLoop(): Promise<void> {
+    const positions = this.paperEngine.getPositions();
+    if (positions.length === 0) return;
+
+    for (const pos of positions) {
+      try {
+        const state = this.symbolStates.get(pos.symbol);
+        const staleMs = state ? Date.now() - state.timestamp : Infinity;
+
+        // Stale or missing feed → force-refresh the price so the open trade is
+        // never sitting on a frozen mark price.
+        if (!state || staleMs > 3000) {
+          const price = await this.restManager.getTickerPrice(pos.symbol);
+          if (price && price > 0) {
+            const tick: MarketTick = {
+              symbol: pos.symbol,
+              price,
+              quantity: 0,
+              timestamp: Date.now(),
+              isBuyerMaker: false
+            };
+            this.processTick(tick);
+          }
+        }
+
+        const freshState = this.symbolStates.get(pos.symbol);
+        if (freshState) {
+          this.evaluateMomentumExit(pos.symbol, freshState, pos);
+        }
+      } catch (err: any) {
+        console.error(`MarketDataEngine: Priority position loop failed for ${pos.symbol}:`, err?.message || err);
+      }
+    }
+  }
+
+  /**
+   * Momentum-based exit — each trade is treated in isolation with its own
+   * indicators. The strategy is NOT married to the higher timeframe until TP:
+   * the moment fast momentum flips against the position:
+   *   - in profit  -> book the profit (MOMENTUM_PROFIT_BOOK)
+   *   - in loss    -> cut early before it rides to the full stop (MOMENTUM_CUT_LOSS)
+   * Requires 3 consecutive seconds of confirmation to avoid RSI noise.
+   */
+  private evaluateMomentumExit(symbol: string, state: AggregatedSymbolState, pos: PaperPosition): void {
+    const ind = state.indicators;
+    const rsi5m = ind?.rsiMultiTimeframe?.tf5m;
+    const rsi15m = ind?.rsiMultiTimeframe?.tf15m;
+    if (rsi5m === undefined || rsi15m === undefined) return;
+
+    const shifted = pos.side === 'LONG'
+      ? (rsi5m < 50 && rsi15m < 50)
+      : (rsi5m > 50 && rsi15m > 50);
+
+    pos.momentumShiftStreak = shifted ? (pos.momentumShiftStreak || 0) + 1 : 0;
+    if (pos.momentumShiftStreak < 3) return;
+
+    const pnl = pos.unrealizedPnL || 0;
+    const margin = pos.margin || 1;
+
+    let reason: ExitReason | null = null;
+    if (pnl > 0) {
+      // Green but momentum flipped — take the money instead of holding for a
+      // TP that may never arrive. Minimum book threshold covers entry+exit fees.
+      if (pnl >= margin * 0.005) reason = 'MOMENTUM_PROFIT_BOOK';
+    } else if (pnl < 0) {
+      // Red + momentum flipped — cut at ~30% of the SL distance, saving ~70%
+      // of the would-be loss instead of riding to the full stop.
+      const slDistance = Math.abs((pos.stopLoss ?? pos.entryPrice) - pos.entryPrice);
+      const moveAgainst = Math.abs((pos.markPrice ?? pos.entryPrice) - pos.entryPrice);
+      if (slDistance > 0 && moveAgainst >= slDistance * 0.3) reason = 'MOMENTUM_CUT_LOSS';
+    }
+
+    if (!reason) return;
+
+    pos.momentumShiftStreak = 0;
+    const closePrice = pos.markPrice || state.lastTick?.price || 0;
+    const closingIntent: PaperOrderIntent = {
+      symbol,
+      side: pos.side === 'LONG' ? 'SELL' : 'BUY',
+      type: 'MARKET',
+      quantity: pos.quantity,
+      context: { reasonOfEntry: 'MOMENTUM_EXIT', marketRegime: state.regime?.regime }
+    };
+    const closingTrade = this.paperEngine.executeOrder(closingIntent, state.depth, closePrice);
+    closingTrade.exitReason = reason;
+    console.log(`MarketDataEngine: ${reason} ${symbol} @ $${closePrice} (PnL ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | RSI5m=${rsi5m}, RSI15m=${rsi15m})`);
+    this.markTradeExit(symbol);
+    this.emitTrade(closingTrade);
   }
 
   public processDepth(depth: DepthSnapshot): void {

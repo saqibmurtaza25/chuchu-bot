@@ -186,7 +186,13 @@ export const SettingsPage: React.FC = () => {
               <option value="1">1 Trade</option>
               <option value="2">2 Trades</option>
               <option value="3">3 Trades</option>
+              <option value="4">4 Trades</option>
+              <option value="5">5 Trades</option>
+              <option value="6">6 Trades</option>
+              <option value="8">8 Trades</option>
+              <option value="10">10 Trades</option>
             </select>
+            <p className="text-chuchu-muted text-[10px]">Har trade isolated — apna alag SL/TP/trailing/momentum check. Max 10 coins tak parallel.</p>
           </div>
 
           <div className="space-y-2">

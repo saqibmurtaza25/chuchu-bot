@@ -637,7 +637,15 @@ export const PaperTradingPage: React.FC = () => {
                       {trade.exitReason && (
                         <div className="flex justify-between">
                           <span className="text-chuchu-muted">EXIT:</span>
-                          <span className={`font-bold ${trade.exitReason === 'TAKE_PROFIT' ? 'text-emerald-400' : trade.exitReason === 'STOP_LOSS' ? 'text-rose-400' : 'text-amber-400'}`}>
+                          <span className={`font-bold ${
+                            trade.exitReason === 'TAKE_PROFIT' || trade.exitReason === 'MOMENTUM_PROFIT_BOOK'
+                              ? 'text-emerald-400'
+                              : trade.exitReason === 'STOP_LOSS' || trade.exitReason === 'LIQUIDATION' || trade.exitReason === 'MOMENTUM_CUT_LOSS'
+                                ? 'text-rose-400'
+                                : trade.exitReason === 'TRAILING_STOP'
+                                  ? 'text-cyan-400'
+                                  : 'text-amber-400'
+                          }`}>
                             {trade.exitReason} {trade.pnl ? `(${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)})` : ''}
                           </span>
                         </div>
@@ -662,6 +670,7 @@ export const PaperTradingPage: React.FC = () => {
                   <th className="py-2.5 px-3">NOTIONAL (USDT)</th>
                   <th className="py-2.5 px-3">FEE (USDT)</th>
                   <th className="py-2.5 px-3">SLIPPAGE</th>
+                  <th className="py-2.5 px-3">EXIT REASON</th>
                   <th className="py-2.5 px-3">REALIZED PNL</th>
                 </tr>
               </thead>
@@ -691,6 +700,23 @@ export const PaperTradingPage: React.FC = () => {
                       <td className="py-2.5 px-3">${notional.toFixed(2)}</td>
                       <td className="py-2.5 px-3 text-amber-400">${trade.fee.toFixed(4)}</td>
                       <td className="py-2.5 px-3">{trade.slippagePct.toFixed(3)}%</td>
+                      <td className="py-2.5 px-3">
+                        {trade.exitReason ? (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${
+                            trade.exitReason === 'TAKE_PROFIT' || trade.exitReason === 'MOMENTUM_PROFIT_BOOK'
+                              ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
+                              : trade.exitReason === 'STOP_LOSS' || trade.exitReason === 'LIQUIDATION' || trade.exitReason === 'MOMENTUM_CUT_LOSS'
+                                ? 'text-rose-400 border-rose-500/40 bg-rose-500/10'
+                                : trade.exitReason === 'TRAILING_STOP'
+                                  ? 'text-cyan-400 border-cyan-500/40 bg-cyan-500/10'
+                                  : 'text-amber-400 border-amber-500/40 bg-amber-500/10'
+                          }`}>
+                            {trade.exitReason}
+                          </span>
+                        ) : (
+                          <span className="text-chuchu-muted">—</span>
+                        )}
+                      </td>
                       <td className={`py-2.5 px-3 font-bold ${trade.pnl !== undefined ? (trade.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-chuchu-muted'}`}>
                         {trade.pnl !== undefined ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(4)}` : '—'}
                       </td>

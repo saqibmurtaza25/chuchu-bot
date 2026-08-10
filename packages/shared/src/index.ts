@@ -172,7 +172,7 @@ export interface TradeContext {
   marketRegime?: string;
 }
 
-export type ExitReason = 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL' | 'SIGNAL_REVERSAL' | 'TIME_EXPIRED' | 'LIQUIDATION' | 'TRAILING_STOP';
+export type ExitReason = 'TAKE_PROFIT' | 'STOP_LOSS' | 'MANUAL' | 'SIGNAL_REVERSAL' | 'TIME_EXPIRED' | 'LIQUIDATION' | 'TRAILING_STOP' | 'MOMENTUM_PROFIT_BOOK' | 'MOMENTUM_CUT_LOSS';
 
 export type ExecutionMode = 'PAPER' | 'REAL';
 
@@ -241,6 +241,7 @@ export interface PaperPosition {
   openedAt?: number;
   closedAt?: number;
   lastFundingAccrualAt?: number;
+  momentumShiftStreak?: number;
   context?: TradeContext;
 }
 

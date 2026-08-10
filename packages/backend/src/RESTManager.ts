@@ -31,8 +31,21 @@ export class RESTManager {
     console.log(`RESTManager: Switched API base URL to ${this.endpoints[this.currentEndpointIndex]}`);
   }
 
-  public async getKlines(symbol: string, interval: string = '1m', limit: number = 100): Promise<CandleOHLCV[]> {
+  public async getTickerPrice(symbol: string): Promise<number | null> {
     try {
+      const response = await this.client.get('/fapi/v1/ticker/price', {
+        params: { symbol: symbol.toUpperCase() }
+      });
+      const price = parseFloat(response.data?.price);
+      return isFinite(price) && price > 0 ? price : null;
+    } catch (error: any) {
+      console.error(`RESTManager: Failed to fetch ticker price for ${symbol}:`, error.message);
+      this.rotateEndpoint();
+      return null;
+    }
+  }
+
+  public async getKlines(symbol: string, interval: string = '1m', limit: number = 100): Promise<CandleOHLCV[]> {    try {
       const response = await this.client.get('/fapi/v1/klines', {
         params: { symbol: symbol.toUpperCase(), interval, limit }
       });
