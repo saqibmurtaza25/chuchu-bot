@@ -363,7 +363,7 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
   });
 
 
-  app.post('/api/v1/order', (req: Request, res: Response) => {
+  app.post('/api/v1/order', async (req: Request, res: Response) => {
     const intent: PaperOrderIntent = req.body;
     if (!intent || !intent.symbol || !intent.side || !intent.quantity) {
       return res.status(400).json({ error: 'Invalid order intent payload schema' });
@@ -371,7 +371,23 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     if (!intent.leverage) intent.leverage = dataEngine.autoTradeConfig.leverage;
 
     const state = dataEngine.getSymbolState(intent.symbol);
-    const lastPrice = state?.lastTick?.price || 50000;
+
+    // NEVER fill at a hardcoded fallback price. Resolve the live price from
+    // the tracked state first, then Bybit, then Binance REST. If none is
+    // available the order is rejected — a garbage fill (e.g. $50000 on a
+    // $0.13 coin) would otherwise poison PnL history.
+    let lastPrice: number | null = state?.lastTick?.price || null;
+    if (!lastPrice || lastPrice <= 0) {
+      lastPrice = await dataEngine.bybitData.getTickerPrice(intent.symbol);
+    }
+    if (!lastPrice || lastPrice <= 0) {
+      lastPrice = await dataEngine.restManager.getTickerPrice(intent.symbol);
+    }
+    if (!lastPrice || lastPrice <= 0) {
+      console.error(`MarketDataEngine: Refused order for ${intent.symbol} — no live price available`);
+      return res.status(503).json({ error: `No live price available for ${intent.symbol} — order rejected` });
+    }
+
     const trade = dataEngine.paperEngine.executeOrder(intent, state?.depth, lastPrice);
 
     // If this manual order closed out the position, start the re-entry cooldown

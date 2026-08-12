@@ -67,7 +67,7 @@ export const PaperTradingPage: React.FC = () => {
 
   const symbolList = Array.from(states.keys());
   const activeState = states.get(selectedSymbol);
-  const markPrice = activeState?.lastTick?.price || 50000;
+  const markPrice = activeState?.lastTick?.price || 0;
   const depth = activeState?.depth;
 
   const handleSubmit = (e: React.FormEvent) => {
