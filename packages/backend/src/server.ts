@@ -2,7 +2,7 @@ import http from 'http';
 import express, { Request, Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import { MarketDataEngine } from './MarketDataEngine';
-import { PaperOrderIntent } from '@chuchu/shared';
+import { PaperOrderIntent, PaperPosition } from '@chuchu/shared';
 import { StatePersistence, PersistedPaperState } from './StatePersistence';
 
 export interface ServerApp {
@@ -397,6 +397,42 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
     io.emit('trade:executed', trade);
     persistNow();
     res.json({ success: true, trade });
+  });
+
+  /**
+   * Per-position trailing-stop manager for open trades.
+   * body: { symbol, action: 'enable' | 'update' | 'disable', distancePct?, activationPct? }
+   */
+  app.post('/api/v1/trailing', (req: Request, res: Response) => {
+    const { symbol, action, distancePct, activationPct } = req.body || {};
+    if (!symbol || typeof symbol !== 'string') {
+      return res.status(400).json({ error: 'Invalid payload — symbol required' });
+    }
+
+    const engine = dataEngine.paperEngine;
+    let position: PaperPosition | null | undefined;
+
+    if (action === 'enable') {
+      position = engine.enableTrailing(symbol.toUpperCase(), Number(distancePct) || 0.6, Number(activationPct) || 0);
+      if (!position) return res.status(400).json({ error: `Cannot enable trailing — no open position for ${symbol}` });
+    } else if (action === 'update') {
+      position = engine.updateTrailing(symbol.toUpperCase(), Number(distancePct) || 0.6);
+      if (!position) return res.status(400).json({ error: `Cannot update trailing — trailing not active or no open position for ${symbol}` });
+    } else if (action === 'disable') {
+      position = engine.disableTrailing(symbol.toUpperCase());
+      if (!position) return res.status(400).json({ error: `Cannot disable trailing — no open position for ${symbol}` });
+    } else {
+      return res.status(400).json({ error: 'Invalid action — use enable | update | disable' });
+    }
+
+    io.emit('paper:update', {
+      balance: engine.getBalance(),
+      positions: engine.getPositions(),
+      tradeHistory: engine.getTradeHistory(),
+      stats: engine.getStats()
+    });
+    persistNow();
+    res.json({ success: true, position });
   });
 
   const start = async (port: number = 8080): Promise<void> => {

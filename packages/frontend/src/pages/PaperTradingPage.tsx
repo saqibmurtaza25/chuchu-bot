@@ -15,9 +15,12 @@ import {
   PieChart,
   Trophy,
   RefreshCw,
-  Download
+  Download,
+  MoveRight,
+  Power
 } from 'lucide-react';
 import { formatPrice, formatTime, formatLatencyDelay } from '../utils/formatting';
+import { PaperPosition } from '@chuchu/shared';
 
 const StatBox: React.FC<{ label: string; value: string; accent: string }> = ({ label, value, accent }) => (
   <div className="p-2.5 bg-chuchu-card/60 rounded-lg border border-chuchu-border">
@@ -25,6 +28,200 @@ const StatBox: React.FC<{ label: string; value: string; accent: string }> = ({ l
     <div className={`text-sm font-black num-font ${accent}`}>{value}</div>
   </div>
 );
+
+/**
+ * Live trailing-stop bar: renders every key price level on a single horizontal
+ * scale so the user can see where price sits relative to entry, stop-loss,
+ * take-profit, and the ratcheting trailing stop — in real time.
+ */
+const TrailingBar: React.FC<{
+  pos: PaperPosition;
+  livePrice: number;
+}> = ({ pos, livePrice }) => {
+  const levels: { price: number; label: string; color: string; solid?: boolean }[] = [
+    { price: pos.entryPrice, label: 'ENTRY', color: '#94a3b8' },
+    ...(pos.stopLoss !== undefined ? [{ price: pos.stopLoss, label: 'SL', color: '#f43f5e' }] : []),
+    ...(pos.takeProfit !== undefined ? [{ price: pos.takeProfit, label: 'TP', color: '#34d399' }] : []),
+    ...(pos.trailingStopActive && pos.trailingStop !== undefined ? [{ price: pos.trailingStop, label: 'TRAIL', color: '#fbbf24', solid: true }] : []),
+    ...(pos.trailingStopActive && pos.peakPrice !== undefined ? [{ price: pos.peakPrice, label: 'PEAK', color: '#a78bfa' }] : [])
+  ];
+
+  const prices = levels.map((l) => l.price).concat([livePrice]);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const span = max - min || 1;
+  const pct = (p: number) => Math.max(0, Math.min(100, ((p - min) / span) * 100));
+
+  const isLong = pos.side === 'LONG';
+  const markPct = pct(livePrice);
+
+  return (
+    <div className="mt-3">
+      <div className="relative h-7 rounded-md overflow-hidden border border-chuchu-border/60 bg-slate-950/80">
+        {/* Directional gradient track */}
+        <div
+          className={`absolute inset-y-0 left-0 ${isLong ? 'bg-emerald-500/20' : 'bg-rose-500/20'}`}
+          style={{ width: `${markPct}%` }}
+        />
+        <div className="absolute inset-0 flex items-center">
+          {levels.map((l) => {
+            const p = pct(l.price);
+            return (
+              <div key={l.label} className="absolute" style={{ left: `${p}%` }}>
+                <div
+                  className={`w-[2px] ${l.solid ? 'w-[3px]' : ''} h-7`}
+                  style={{ backgroundColor: l.color, boxShadow: l.solid ? `0 0 8px ${l.color}` : undefined }}
+                  title={`${l.label} $${l.price}`}
+                />
+              </div>
+            );
+          })}
+        </div>
+        {/* Live mark marker */}
+        <div className="absolute top-0 bottom-0" style={{ left: `${markPct}%` }}>
+          <div className="w-0.5 h-full bg-white" />
+          <div className={`absolute -top-0.5 left-1/2 -translate-x-1/2 w-2 h-2 rotate-45 ${isLong ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+        </div>
+      </div>
+      <div className="flex justify-between mt-1 text-[8px] num-font">
+        <span className="text-slate-400">${formatPrice(min)}</span>
+        <span className="text-slate-400">${formatPrice(max)}</span>
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[8px]">
+        <span className="text-slate-300">M: <b className="text-white">${formatPrice(livePrice)}</b></span>
+        <span className="text-slate-400">E: <b>${formatPrice(pos.entryPrice)}</b></span>
+        {pos.stopLoss !== undefined && <span className="text-rose-400">SL: ${formatPrice(pos.stopLoss)}</span>}
+        {pos.takeProfit !== undefined && <span className="text-emerald-400">TP: ${formatPrice(pos.takeProfit)}</span>}
+        {pos.trailingStopActive && pos.trailingStop !== undefined && (
+          <span className="text-amber-300">TRAIL: ${formatPrice(pos.trailingStop)}</span>
+        )}
+        {pos.trailingStopActive && pos.peakPrice !== undefined && (
+          <span className="text-purple-300">PEAK: ${formatPrice(pos.peakPrice)}</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Per-position trailing stop manager: enable / adjust / disable the trail and
+ * show armed state + distance to the trailing stop live.
+ */
+const TrailingStopManager: React.FC<{
+  pos: PaperPosition;
+  livePrice: number;
+  setTrailingStop: (symbol: string, action: 'enable' | 'update' | 'disable', distancePct?: number, activationPct?: number) => Promise<void>;
+}> = ({ pos, livePrice, setTrailingStop }) => {
+  const [distance, setDistance] = useState<number>(pos.trailingStopPct || 0.6);
+  const [activation, setActivation] = useState<number>(pos.trailActivationPct || 0);
+
+  const active = !!pos.trailingStopActive;
+  const armed = !!pos.trailActivated;
+
+  let distanceToTrail: number | null = null;
+  if (active && pos.trailingStop !== undefined && livePrice > 0) {
+    distanceToTrail = pos.side === 'LONG'
+      ? ((livePrice - pos.trailingStop) / livePrice) * 100
+      : ((pos.trailingStop - livePrice) / livePrice) * 100;
+  }
+
+  const savedPnlPct = (() => {
+    if (!active || pos.trailingStop === undefined || pos.entryPrice <= 0) return null;
+    return pos.side === 'LONG'
+      ? ((pos.trailingStop - pos.entryPrice) / pos.entryPrice) * 100
+      : ((pos.entryPrice - pos.trailingStop) / pos.entryPrice) * 100;
+  })();
+
+  return (
+    <div className={`mt-3 p-2 rounded-lg border ${active ? 'border-amber-400/40 bg-amber-950/10' : 'border-chuchu-border/50 bg-chuchu-bg/50'}`}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center space-x-1.5">
+          <MoveRight className={`w-3.5 h-3.5 ${active ? 'text-amber-300' : 'text-chuchu-muted'}`} />
+          <span className="text-[10px] font-extrabold tracking-wider uppercase text-chuchu-text">TRAILING STOP</span>
+          {active && (
+            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${armed ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-slate-700/60 text-slate-300 border-slate-500/40'}`}>
+              {armed ? 'ARMED' : 'ARMING'}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => active ? setTrailingStop(pos.symbol, 'disable') : setTrailingStop(pos.symbol, 'enable', distance, activation)}
+          className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[9px] font-black border transition-colors ${
+            active
+              ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+              : 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+          }`}
+          title={active ? 'Disable trailing stop' : 'Enable trailing stop'}
+        >
+          <Power className="w-3 h-3" />
+          <span>{active ? 'DISABLE' : 'ENABLE'}</span>
+        </button>
+      </div>
+
+      {active && (
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-2 gap-1.5">
+            <label className="block">
+              <span className="text-[8px] text-chuchu-muted font-bold uppercase">Distance %</span>
+              <input
+                type="number"
+                min={0.1}
+                max={5}
+                step={0.1}
+                value={distance}
+                onChange={(e) => setDistance(parseFloat(e.target.value) || 0.6)}
+                className="w-full px-1.5 py-1 rounded bg-slate-900 border border-chuchu-border text-[11px] num-font text-amber-300 font-bold"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[8px] text-chuchu-muted font-bold uppercase">Activation %</span>
+              <input
+                type="number"
+                min={0}
+                max={50}
+                step={0.25}
+                value={activation}
+                onChange={(e) => setActivation(parseFloat(e.target.value) || 0)}
+                className="w-full px-1.5 py-1 rounded bg-slate-900 border border-chuchu-border text-[11px] num-font text-purple-300 font-bold"
+              />
+            </label>
+          </div>
+          <button
+            onClick={() => setTrailingStop(pos.symbol, 'update', distance, activation)}
+            className="w-full py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[9px] font-black border border-amber-500/30 transition-colors"
+          >
+            APPLY TRAIL DISTANCE
+          </button>
+
+          <div className="grid grid-cols-2 gap-1.5 text-[10px] num-font">
+            <div className="p-1 rounded bg-slate-900/80 border border-chuchu-border/40">
+              <div className="text-[8px] text-chuchu-muted font-bold uppercase">Trail Stop Price</div>
+              <div className={`font-black ${pos.trailingStop !== undefined ? 'text-amber-300' : 'text-slate-400'}`}>
+                {pos.trailingStop !== undefined ? `$${formatPrice(pos.trailingStop)}` : '---'}
+              </div>
+            </div>
+            <div className="p-1 rounded bg-slate-900/80 border border-chuchu-border/40">
+              <div className="text-[8px] text-chuchu-muted font-bold uppercase">Dist to Trail</div>
+              <div className={`font-black ${distanceToTrail !== null && distanceToTrail <= 0.15 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {distanceToTrail !== null ? `${distanceToTrail.toFixed(2)}%` : '---'}
+              </div>
+            </div>
+            <div className="p-1 rounded bg-slate-900/80 border border-chuchu-border/40">
+              <div className="text-[8px] text-chuchu-muted font-bold uppercase">Locked PnL</div>
+              <div className={`font-black ${savedPnlPct !== null && savedPnlPct >= 0 ? 'text-emerald-400' : savedPnlPct !== null ? 'text-rose-400' : 'text-slate-400'}`}>
+                {savedPnlPct !== null ? `${savedPnlPct >= 0 ? '+' : ''}${savedPnlPct.toFixed(2)}%` : '---'}
+              </div>
+            </div>
+            <div className="p-1 rounded bg-slate-900/80 border border-chuchu-border/40">
+              <div className="text-[8px] text-chuchu-muted font-bold uppercase">Peak Price</div>
+              <div className="font-black text-purple-300">{pos.peakPrice !== undefined ? `$${formatPrice(pos.peakPrice)}` : '---'}</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const PaperTradingPage: React.FC = () => {
   const {
@@ -37,6 +234,7 @@ export const PaperTradingPage: React.FC = () => {
     paperStats,
     submitOrder,
     closePosition,
+    setTrailingStop,
     timezone,
     resetTradeHistory,
     resetDemoBalance,
@@ -431,6 +629,12 @@ export const PaperTradingPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
+                  {/* Live Trailing Bar */}
+                  <TrailingBar pos={pos} livePrice={livePrice} />
+
+                  {/* Trailing Stop Manager */}
+                  <TrailingStopManager pos={pos} livePrice={livePrice} setTrailingStop={setTrailingStop} />
                 </div>
               );
             })}

@@ -12,6 +12,7 @@ export * from './ScannerEngine';
 export * from './SignalEngine';
 export * from './PaperTradingEngine';
 export * from './AnalyticsEngine';
+export * from './ReversalIntelligenceEngine';
 export * from './CoinDiscoveryEngine';
 export * from './HeatHunterEngine';
 export * from './PriorityQueueEngine';

@@ -155,6 +155,86 @@ export const SignalsPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Multi-Timeframe Reversal Intelligence */}
+                {state.reversalIntel && (
+                  <div className="p-3 bg-slate-950/70 rounded-lg border border-chuchu-cyan/30 my-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[10px] text-chuchu-cyan font-extrabold tracking-wider uppercase flex items-center space-x-1">
+                        <ScanSearch className="w-3.5 h-3.5" />
+                        <span>MULTI-TIMEFRAME REVERSAL INTELLIGENCE</span>
+                      </div>
+                      <span className="num-font text-[10px] px-2 py-0.5 rounded border border-chuchu-cyan/40 bg-chuchu-cyan/10 text-chuchu-cyan font-extrabold">
+                        REVERSAL SCORE {state.reversalIntel.overallScore}/100
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5 text-center text-[11px] mb-2">
+                      <div className="p-1.5 bg-slate-900/80 rounded border border-emerald-500/30">
+                        <div className="text-[9px] text-emerald-400 font-extrabold uppercase">Bullish</div>
+                        <div className="num-font text-sm font-black text-emerald-400">{state.reversalIntel.bullishProbability}%</div>
+                      </div>
+                      <div className="p-1.5 bg-slate-900/80 rounded border border-rose-500/30">
+                        <div className="text-[9px] text-rose-400 font-extrabold uppercase">Bearish</div>
+                        <div className="num-font text-sm font-black text-rose-400">{state.reversalIntel.bearishProbability}%</div>
+                      </div>
+                      <div className="p-1.5 bg-slate-900/80 rounded border border-slate-600/40">
+                        <div className="text-[9px] text-slate-400 font-extrabold uppercase">Uncertain</div>
+                        <div className="num-font text-sm font-black text-slate-300">{state.reversalIntel.uncertainPct}%</div>
+                      </div>
+                    </div>
+
+                    {/* Consensus distribution bar */}
+                    <div className="flex h-1.5 rounded overflow-hidden mb-2 bg-slate-800">
+                      <div className="bg-emerald-400" style={{ width: `${state.reversalIntel.bullishProbability}%` }} />
+                      <div className="bg-rose-400" style={{ width: `${state.reversalIntel.bearishProbability}%` }} />
+                      <div className="bg-slate-500" style={{ width: `${state.reversalIntel.uncertainPct}%` }} />
+                    </div>
+
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-[11px] font-extrabold uppercase ${state.reversalIntel.consensusDirection === 'BULLISH' ? 'text-emerald-400' : state.reversalIntel.consensusDirection === 'BEARISH' ? 'text-rose-400' : 'text-slate-300'}`}>
+                        Consensus: {state.reversalIntel.consensusDirection}
+                      </span>
+                      <span className="text-[11px] text-chuchu-cyan font-extrabold">Horizon: {state.reversalIntel.expectedHorizon}</span>
+                    </div>
+
+                    {/* Timeframe consensus chips */}
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {state.reversalIntel.timeframes.slice(0, 10).map((tf) => (
+                        <span
+                          key={tf.timeframe}
+                          className={`px-1.5 py-0.5 rounded text-[9px] num-font font-bold border ${
+                            tf.direction === 'BULLISH'
+                              ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40'
+                              : tf.direction === 'BEARISH'
+                                ? 'bg-rose-950/60 text-rose-300 border-rose-500/40'
+                                : 'bg-slate-800 text-slate-400 border-slate-600/50'
+                          }`}
+                        >
+                          {tf.timeframe} {tf.extreme === 'NEUTRAL' ? '·' : tf.extreme === 'OVERBOUGHT' ? 'OB' : 'OS'} {tf.historicalReversalPct}% ({tf.samples})
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* Layer confirmations */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 mb-2">
+                      {state.reversalIntel.layers.map((layer) => (
+                        <div key={layer.layer} className="flex items-center justify-between px-1.5 py-0.5 rounded bg-slate-900/70 border border-slate-700/50 text-[10px]">
+                          <span className="text-slate-300 font-bold truncate">{layer.layer}</span>
+                          <span className={`num-font font-extrabold ${layer.score >= 60 ? 'text-emerald-400' : layer.score <= 40 ? 'text-rose-400' : 'text-slate-300'}`}>
+                            {layer.score}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {state.reversalIntel.summary && (
+                      <p className="text-[10px] text-slate-400 leading-relaxed border-t border-slate-700/50 pt-1.5">
+                        {state.reversalIntel.summary}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Reasons Matrix List */}
                 <div className="space-y-1.5 mb-3">
                   <div className="text-[10px] text-slate-200 font-extrabold tracking-wider uppercase flex items-center space-x-1">

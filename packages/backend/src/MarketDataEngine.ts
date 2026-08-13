@@ -28,6 +28,7 @@ import {
   CoinDiscoveryEngine,
   HeatHunterEngine,
   PriorityQueueEngine,
+  ReversalIntelligenceEngine,
   ScreenerConfig
 } from '@chuchu/engine-core';
 
@@ -69,6 +70,7 @@ export class MarketDataEngine {
   public paperEngine = new PaperTradingEngine();
   public exchangeExecutor = new BinanceFuturesExecutor();
   public analyticsEngine = new AnalyticsEngine();
+  public reversalIntelEngine = new ReversalIntelligenceEngine();
 
   // 4-Stage Discovery Pipeline Modules
   public discoveryEngine = new CoinDiscoveryEngine();
@@ -176,6 +178,87 @@ export class MarketDataEngine {
       await Promise.all(tfs.map(tf => this.ensureMtfHistory(sym, tf)));
       await new Promise(resolve => setTimeout(resolve, 40)); // pace REST calls
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Reversal-intel kline source: WS keeps 1m/5m/15m/1h/4h/12h in
+  // `mtfKlineHistory`; the remaining 4 timeframes (1d/2h/30m/3m)
+  // are seeded once via REST here and kept in a separate cache.
+  // ─────────────────────────────────────────────────────────────
+  private reversalExtraHistory = new Map<string, Map<string, CandleOHLCV[]>>();
+  private static readonly REVERSAL_EXTRA_TFS = ['1d', '2h', '30m', '3m'];
+  private reversalBackfillInFlight = new Set<string>();
+  private lastReversalIntelAt = new Map<string, number>();
+  private static readonly REVERSAL_INTEL_MIN_INTERVAL_MS = 15000;
+
+  private async ensureReversalHistory(symbol: string, tf: string): Promise<void> {
+    const key = `${symbol}|${tf}`;
+    if (this.reversalBackfillInFlight.has(key)) return;
+    const existing = this.reversalExtraHistory.get(symbol)?.get(tf);
+    if (existing && existing.length >= 100) return;
+
+    this.reversalBackfillInFlight.add(key);
+    try {
+      let klines = await this.restManager.getKlines(symbol, tf, 250);
+      if (klines.length === 0 && this.bybitData) {
+        klines = await this.bybitData.getKlines(symbol, tf, 250);
+      }
+      if (klines.length > 0) {
+        let tfMap = this.reversalExtraHistory.get(symbol);
+        if (!tfMap) {
+          tfMap = new Map();
+          this.reversalExtraHistory.set(symbol, tfMap);
+        }
+        tfMap.set(tf, klines);
+      }
+    } catch (e) {
+      // transient REST failure — retried next pipeline cycle
+    } finally {
+      this.reversalBackfillInFlight.delete(key);
+    }
+  }
+
+  public async seedReversalHistories(symbols: string[]): Promise<void> {
+    for (const sym of symbols) {
+      await Promise.all(MarketDataEngine.REVERSAL_EXTRA_TFS.map(tf => this.ensureReversalHistory(sym, tf)));
+      await new Promise(resolve => setTimeout(resolve, 40)); // pace REST calls
+    }
+  }
+
+  /** Assemble the full TF kline map used by the reversal engine. */
+  private getReversalTfKlines(symbol: string): Record<string, CandleOHLCV[]> {
+    const tfKlines: Record<string, CandleOHLCV[]> = {};
+    const live = this.mtfKlineHistory.get(symbol);
+    if (live) {
+      for (const [tf, klines] of live) {
+        if (klines.length >= 50) tfKlines[tf] = klines;
+      }
+    }
+    const extra = this.reversalExtraHistory.get(symbol);
+    if (extra) {
+      for (const [tf, klines] of extra) {
+        if (klines.length >= 50) tfKlines[tf] = klines;
+      }
+    }
+    return tfKlines;
+  }
+
+  /**
+   * Compute + cache the multi-timeframe reversal intelligence for a symbol.
+   * Throttled so rapid kline events don't recompute (10 TFs × W%R200 is ~O(n·p)).
+   */
+  public refreshReversalIntel(symbol: string): void {
+    const lastAt = this.lastReversalIntelAt.get(symbol) || 0;
+    if (Date.now() - lastAt < MarketDataEngine.REVERSAL_INTEL_MIN_INTERVAL_MS) return;
+
+    const state = this.symbolStates.get(symbol);
+    if (!state) return;
+    const tfKlines = this.getReversalTfKlines(symbol);
+    if (Object.keys(tfKlines).length < 3) return;
+
+    const price = state.lastTick?.price || state.indicators?.vwap || undefined;
+    state.reversalIntel = this.reversalIntelEngine.analyze(symbol, tfKlines, state.microstructure, price);
+    this.lastReversalIntelAt.set(symbol, Date.now());
   }
 
   private updateMtfFromKline(kline: CandleOHLCV): void {
@@ -1200,6 +1283,33 @@ export class MarketDataEngine {
             console.log(`MarketDataEngine: ${symbol} still blocked — re-qualification pending (${why})`);
           }
         }
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // REVERSAL INTELLIGENCE PASS
+      // Phase 1: advisory evidence layer for coins with fresh signals or
+      // strong heat. Seeds the 4 extra TFs once via REST, then computes the
+      // MTF historical reversal score and attaches it to state.reversalIntel.
+      // This is NOT a gate — it only adds evidence for the frontend panel.
+      // ─────────────────────────────────────────────────────────────
+      try {
+        const signalSymbols = finalSignals.map(s => s.symbol);
+        const hotSymbols = heatCandidates
+          .filter(c => c.heatConfirmed)
+          .sort((a, b) => (b.rsi5m > 70 || b.rsi5m < 30 ? Math.abs(b.rsi5m - 50) : 0) - (a.rsi5m > 70 || a.rsi5m < 30 ? Math.abs(a.rsi5m - 50) : 0))
+          .slice(0, 8)
+          .map(c => c.symbol);
+        const reversalSymbols = Array.from(new Set([...signalSymbols, ...hotSymbols, ...(this.focusedSymbol ? [this.focusedSymbol.toUpperCase()] : [])])).slice(0, 14);
+
+        if (reversalSymbols.length > 0) {
+          await this.seedReversalHistories(reversalSymbols);
+          for (const sym of reversalSymbols) {
+            this.refreshReversalIntel(sym);
+          }
+          console.log(`MarketDataEngine: Reversal intel refreshed for ${reversalSymbols.length} symbols (${Date.now() - pipelineStart}ms total)`);
+        }
+      } catch (reversalErr: any) {
+        console.error('MarketDataEngine: Reversal intelligence pass error:', reversalErr.message);
       }
 
       // Calculate dynamic next interval. 30s default reduces REST load ~3x;

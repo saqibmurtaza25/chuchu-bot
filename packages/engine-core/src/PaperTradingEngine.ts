@@ -34,6 +34,53 @@ export class PaperTradingEngine {
     if (distancePct > 0) this.trailingDistancePct = distancePct;
   }
 
+  /**
+   * Enables a per-position trailing stop via the open-trade manager.
+   * Trails purely off the favorable peak price — no TP required.
+   */
+  public enableTrailing(symbol: string, distancePct: number, activationPct: number = 0): PaperPosition | null {
+    const pos = this.positions.get(symbol);
+    if (!pos) return null;
+    const pct = parseFloat(String(distancePct));
+    if (!isFinite(pct) || pct <= 0 || pct > 5) return null;
+    pos.trailingStopPct = pct;
+    pos.trailActivationPct = isFinite(activationPct) && activationPct > 0 ? Math.min(activationPct, 50) : 0;
+    pos.trailingStopActive = true;
+    pos.trailActivated = false;
+    pos.trailingStop = undefined;
+    pos.peakPrice = pos.markPrice || pos.entryPrice;
+    pos.trailUpdatedAt = Date.now();
+    return pos;
+  }
+
+  /** Adjusts the trailing distance on a live position and re-ratchets immediately. */
+  public updateTrailing(symbol: string, distancePct: number): PaperPosition | null {
+    const pos = this.positions.get(symbol);
+    if (!pos || !pos.trailingStopActive) return null;
+    const pct = parseFloat(String(distancePct));
+    if (!isFinite(pct) || pct <= 0 || pct > 5) return null;
+    pos.trailingStopPct = pct;
+    if (pos.trailActivated) {
+      const trailStop = pos.side === 'LONG'
+        ? (pos.peakPrice || pos.markPrice) * (1 - pct / 100)
+        : (pos.peakPrice || pos.markPrice) * (1 + pct / 100);
+      pos.trailingStop = parseFloat(trailStop.toFixed(4));
+      pos.trailUpdatedAt = Date.now();
+    }
+    return pos;
+  }
+
+  /** Turns off the trailing stop; the position falls back to its plain stop-loss. */
+  public disableTrailing(symbol: string): PaperPosition | null {
+    const pos = this.positions.get(symbol);
+    if (!pos) return null;
+    pos.trailingStopActive = false;
+    pos.trailingStop = undefined;
+    pos.trailActivated = false;
+    pos.trailUpdatedAt = Date.now();
+    return pos;
+  }
+
   public getBalance(): number {
     return this.balance;
   }
@@ -314,6 +361,47 @@ export class PaperTradingEngine {
   }
 
   /**
+   * Per-position trailing stop. Tracks the favorable peak price since entry,
+   * arms after `trailActivationPct` favorable move (0 = immediate), then
+   * ratchets the stop behind the peak and never loosens it.
+   */
+  private updatePerPositionTrailing(pos: PaperPosition, markPrice: number): number | undefined {
+    const pct = pos.trailingStopPct!;
+    if (pos.peakPrice === undefined) pos.peakPrice = markPrice;
+    if (pos.side === 'LONG') {
+      if (markPrice > pos.peakPrice) pos.peakPrice = markPrice;
+    } else {
+      if (markPrice < pos.peakPrice) pos.peakPrice = markPrice;
+    }
+
+    const activationPct = pos.trailActivationPct || 0;
+    if (!pos.trailActivated) {
+      const threshold = activationPct > 0
+        ? pos.entryPrice * (1 + (pos.side === 'LONG' ? 1 : -1) * (activationPct / 100))
+        : pos.entryPrice;
+      const armed = pos.side === 'LONG' ? markPrice >= threshold : markPrice <= threshold;
+      if (!armed) return pos.stopLoss;
+      pos.trailActivated = true;
+      pos.trailUpdatedAt = Date.now();
+    }
+
+    const trailStop = pos.side === 'LONG'
+      ? pos.peakPrice! * (1 - pct / 100)
+      : pos.peakPrice! * (1 + pct / 100);
+    if (pos.trailingStop === undefined) {
+      pos.trailingStop = parseFloat(trailStop.toFixed(4));
+      pos.trailUpdatedAt = Date.now();
+    } else if (pos.side === 'LONG' && trailStop > pos.trailingStop) {
+      pos.trailingStop = parseFloat(trailStop.toFixed(4));
+      pos.trailUpdatedAt = Date.now();
+    } else if (pos.side === 'SHORT' && trailStop < pos.trailingStop) {
+      pos.trailingStop = parseFloat(trailStop.toFixed(4));
+      pos.trailUpdatedAt = Date.now();
+    }
+    return pos.trailingStop;
+  }
+
+  /**
    * Updates mark prices for open positions to calculate unrealized PnL, accrue
    * pro-rated funding, and monitor auto TP/SL + liquidation.
    */
@@ -357,11 +445,16 @@ export class PaperTradingEngine {
       }
     }
 
-    // Trailing stop (smart-profit lock): arms once price moves activationPct of the
-    // entry→TP distance, then ratchets the stop behind price and never moves it back.
+    // Trailing stop (smart-profit lock):
+    //  - Per-position trailing (set via the open-trade manager) takes priority.
+    //    It trails off the favorable peak price and needs no TP.
+    //  - Otherwise the default global template arms at activationPct of the
+    //    entry→TP distance, then ratchets the stop behind price.
     const tp = pos.takeProfit;
     let activeStop = pos.stopLoss;
-    if (!triggerClose && this.trailingStopEnabled && tp !== undefined) {
+    if (!triggerClose && pos.trailingStopActive && pos.trailingStopPct !== undefined && pos.trailingStopPct > 0) {
+      activeStop = this.updatePerPositionTrailing(pos, markPrice);
+    } else if (!triggerClose && this.trailingStopEnabled && tp !== undefined) {
       const tpDistance = Math.abs(tp - pos.entryPrice);
       const activationThreshold = pos.entryPrice + (pos.side === 'LONG' ? 1 : -1) * tpDistance * (this.trailingActivationPct / 100);
       const gained = pos.side === 'LONG' ? markPrice >= activationThreshold : markPrice <= activationThreshold;

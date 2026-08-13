@@ -41,6 +41,7 @@ interface ChuchuState {
   disconnect: () => void;
   submitOrder: (symbol: string, side: 'BUY' | 'SELL', quantity: number) => Promise<void>;
   closePosition: (symbol: string) => Promise<void>;
+  setTrailingStop: (symbol: string, action: 'enable' | 'update' | 'disable', distancePct?: number, activationPct?: number) => Promise<void>;
   fetchStateSnapshots: () => Promise<void>;
   fetchPipeline: () => Promise<void>;
   resetPaperAccount: () => Promise<void>;
@@ -320,6 +321,25 @@ export const useChuchuStore = create<ChuchuState>((set, get) => {
     if (!pos || pos.quantity <= 0) return;
     const closingSide = pos.side === 'LONG' ? 'SELL' : 'BUY';
     await get().submitOrder(symbol, closingSide, pos.quantity);
+  },
+
+  setTrailingStop: async (symbol, action, distancePct, activationPct) => {
+    try {
+      const url = get().serverUrl;
+      await fetch(`${url}/api/v1/trailing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol,
+          action,
+          distancePct: distancePct ?? undefined,
+          activationPct: activationPct ?? undefined
+        })
+      });
+      await get().fetchStateSnapshots();
+    } catch (err) {
+      console.error('Trailing stop update failed:', err);
+    }
   },
 
   resetPaperAccount: async () => {

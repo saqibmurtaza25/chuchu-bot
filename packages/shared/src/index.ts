@@ -233,6 +233,16 @@ export interface PaperPosition {
   takeProfit?: number;
   trailingStop?: number;
   trailActivated?: boolean;
+  /** Per-position trailing stop distance as % of price (e.g. 0.6 = 0.6%). */
+  trailingStopPct?: number;
+  /** Per-position trailing stop enabled via the open-trade manager. */
+  trailingStopActive?: boolean;
+  /** % favorable move from entry required before the trail arms (0 = immediate). */
+  trailActivationPct?: number;
+  /** Most favorable price reached since entry — drives the trailing ratchet. */
+  peakPrice?: number;
+  /** Timestamp of the last trailing-stop ratchet (for UI freshness). */
+  trailUpdatedAt?: number;
   leverage?: number;
   liquidationPrice?: number;
   fundingPaid?: number;
@@ -293,6 +303,49 @@ export type CandidateLifecycle =
   | 'REQUALIFY'
   | 'CLOSED';
 
+// ============================================================
+// MULTI-TIMEFRAME REVERSAL INTELLIGENCE
+// Historical + current MTF behavior engine. For every timeframe the engine
+// computes RSI14 + W%R200, measures how often comparable historical setups
+// (same W%R200 × RSI14 bucket) actually reversed, then fuses that with
+// orderflow evidence (CVD, orderbook, whale, VPVR) into an evidence score.
+// Phase 1: advisory evidence — does NOT gate entries by itself.
+// ============================================================
+
+export type ReversalDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+
+export interface TimeframeReversalIntel {
+  timeframe: string;
+  rsi14: number;
+  wr200: number;
+  extreme: 'OVERSOLD' | 'OVERBOUGHT' | 'NEUTRAL';
+  /** % of matched historical setups that actually reversed in the favorable direction */
+  historicalReversalPct: number;
+  /** number of historical samples matched for this bucket */
+  samples: number;
+  direction: ReversalDirection;
+}
+
+export interface ReversalLayerConfidence {
+  layer: 'HTF_ALIGNMENT' | 'MID_TF_ALIGNMENT' | 'MICRO_TF_ALIGNMENT' | 'WR200_EDGE' | 'RSI_EDGE' | 'CVD' | 'ORDERBOOK' | 'WHALE' | 'VPVR';
+  score: number; // 0-100
+}
+
+export interface ReversalIntelResult {
+  symbol: string;
+  /** 0-100 — overall conviction in the reversal thesis (max of bull/bear lean) */
+  overallScore: number;
+  bullishProbability: number;
+  bearishProbability: number;
+  uncertainPct: number;
+  timeframes: TimeframeReversalIntel[];
+  layers: ReversalLayerConfidence[];
+  consensusDirection: ReversalDirection;
+  expectedHorizon: string;
+  summary: string;
+  computedAt: number;
+}
+
 export interface AggregatedSymbolState {
   symbol: string;
   volume24h?: number;
@@ -312,6 +365,7 @@ export interface AggregatedSymbolState {
   scores?: EngineScoreState;
   signal?: SignalResult;
   lifecycle?: CandidateLifecycle;
+  reversalIntel?: ReversalIntelResult;
   timestamp: number;
 }
 
