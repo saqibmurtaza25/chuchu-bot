@@ -363,22 +363,28 @@ export class MarketDataEngine {
   private lastTradeExitAt: Map<string, number> = new Map();
 
   /**
-   * Symbols whose trade just closed are REMOVED from the execution list and must
-   * be re-processed from the very start of the discovery pipeline (Stage 1 →
-   * Stage 2 heat → Stage 4 signal) before they can be traded again. Time does
-   * not matter — the full re-qualification process does.
-   * key: symbol, value: timestamp the re-qualification was started.
+   * FIFO re-entry queue, ordered by close time.
+   * When a trade closes the coin is appended to the END of this list. On the
+   * next pipeline cycles it must re-qualify from scratch (Stage 1 → heat →
+   * Stage 4 signal), and even then it may ONLY reopen once every coin ahead
+   * of it in the queue has had its turn (opened or dropped out). This stops
+   * the rapid open→close→reopen churn on a single hot coin.
    */
-  private requalifyBlock = new Map<string, number>();
+  private reentryQueue: string[] = [];
+
+  private enqueueReentry(symbol: string): void {
+    if (!this.reentryQueue.includes(symbol)) this.reentryQueue.push(symbol);
+  }
 
   /**
    * Called on EVERY position close (auto TP/SL/LIQ/trailing/momentum or manual).
-   * Strips the coin back to the discovery stage: clears its lingering signal and
-   * forces it to re-qualify through the pipeline before any re-entry.
+   * Strips the coin back to the discovery stage and queues it at the END of the
+   * FIFO re-entry list — it can only trade again after full pipeline
+   * re-qualification AND after every coin that closed before it has its turn.
    */
   public markTradeExit(symbol: string): void {
     this.lastTradeExitAt.set(symbol, Date.now());
-    this.requalifyBlock.set(symbol, Date.now());
+    this.enqueueReentry(symbol);
 
     const state = this.symbolStates.get(symbol);
     if (state) {
@@ -386,7 +392,7 @@ export class MarketDataEngine {
       state.reasons = [];
       state.lifecycle = 'REQUALIFY';
     }
-    console.log(`MarketDataEngine: ${symbol} trade closed → REMOVED from execution list, full re-qualification started`);
+    console.log(`MarketDataEngine: ${symbol} trade closed → queued for re-entry (FIFO position ${this.reentryQueue.length})`);
   }
 
   public applyTrailingConfig(): void {
@@ -700,8 +706,10 @@ export class MarketDataEngine {
     let reason: ExitReason | null = null;
     if (pnl > 0) {
       // Green but momentum flipped — take the money instead of holding for a
-      // TP that may never arrive. Minimum book threshold covers entry+exit fees.
-      if (pnl >= margin * 0.005) reason = 'MOMENTUM_PROFIT_BOOK';
+      // TP that may never arrive. Minimum book threshold covers entry+exit fees
+      // AND a meaningful result (1% of margin ≈ 0.1% price at 10x leverage),
+      // so tiny micro-profits do not churn the trade count.
+      if (pnl >= margin * 0.01) reason = 'MOMENTUM_PROFIT_BOOK';
     } else if (pnl < 0) {
       // Red + momentum flipped — cut at ~30% of the SL distance, saving ~70%
       // of the would-be loss instead of riding to the full stop.
@@ -839,9 +847,9 @@ export class MarketDataEngine {
     const hasOpenPosition = this.paperEngine.getPositions().some(p => p.symbol === symbol);
     if (hasOpenPosition) {
       state.lifecycle = 'OPEN_TRADE';
-    } else if (this.requalifyBlock.has(symbol)) {
-      // Trade just closed — coin is removed from execution list and must
-      // re-qualify through the full pipeline before it can be traded again.
+    } else if (this.reentryQueue.includes(symbol)) {
+      // Trade just closed — coin is queued at the END of the FIFO re-entry list
+      // and must re-qualify through the full pipeline before it can reopen.
       state.lifecycle = 'REQUALIFY';
     } else if (signal.signal !== 'NEUTRAL') {
       state.lifecycle = 'SIGNAL';
@@ -885,85 +893,11 @@ export class MarketDataEngine {
     };
     state.scores = scores;
 
-    // Auto-Trading Execution Loop
-    if (this.autoTradeConfig.mode === 'AUTO' && signal.signal !== 'NEUTRAL') {
-      const activePositions = this.paperEngine.getPositions();
-      
-      // Smart-money filter: only enter setups that meet the minimum risk:reward
-      const minRR = this.autoTradeConfig.minRiskReward || 1.5;
-      const rr = signal.riskRewardRatio || 0;
-
-      // Re-entry cooldown: after a win/loss closes, the same coin must
-      // re-qualify and wait out the cooldown before it can be traded again.
-      const cooldownMs = (this.autoTradeConfig.reentryCooldownMin || 0) * 60 * 1000;
-      const lastExit = this.lastTradeExitAt.get(symbol) || 0;
-      const cooldownLeftMs = cooldownMs > 0 ? cooldownMs - (Date.now() - lastExit) : 0;
-      
-      // Constraint: Check Max Open Trades Limit
-      if (activePositions.length < this.autoTradeConfig.maxOpenTrades && !activePositions.some(p => p.symbol === symbol)) {
-        const config = this.autoTradeConfig;
-        
-        if (this.requalifyBlock.has(symbol)) {
-          // HARD GATE: coin just closed — it must be re-processed from the
-          // start (Stage1 discovery → Stage2 heat → Stage4 signal) and only
-          // then re-entered. No logging per tick; transition is logged at
-          // block start (markTradeExit) and at clear (pipeline requalify).
-        } else if (cooldownLeftMs > 0) {
-          console.log(`MarketDataEngine: ${symbol} in cooldown (${(cooldownLeftMs / 1000).toFixed(0)}s left) — skipping re-entry`);
-        } else if (rr < minRR) {
-          console.log(`MarketDataEngine: Skipping ${symbol} — R:R ${rr.toFixed(2)} < ${minRR.toFixed(2)}`);
-        } else {
-          // Calculate target quantity using margin and leverage
-          const usdSize = config.margin * config.leverage;
-          const quantity = parseFloat((usdSize / lastPrice).toFixed(4));
-          
-          if (quantity > 0) {
-            console.log(`MarketDataEngine: Auto-Trading triggering ${signal.signal} order for ${symbol} with Qty=${quantity} (Leverage=${config.leverage}x, R:R=${rr.toFixed(2)})`);
-            
-            const intent: PaperOrderIntent = {
-              symbol,
-              side: signal.signal === 'BUY' ? 'BUY' : 'SELL',
-              type: 'MARKET',
-              quantity,
-              stopLoss: signal.stopLoss,
-              takeProfit: signal.takeProfit,
-              leverage: config.leverage,
-              context: {
-                reasonOfEntry: 'AUTO_TRADER_EXECUTION',
-                hunterScore: state.hunter?.hunterScore,
-                setupQuality: signal.setupQuality,
-                rsi: state.indicators?.rsiMultiTimeframe?.tf5m,
-                wmr: state.indicators?.williamsR200,
-                adx: state.indicators?.adx14?.adx,
-                emaTrend: state.indicators ? (state.indicators.ema20 > state.indicators.ema50 ? 'BULL' : 'BEAR') : 'NEUTRAL',
-                marketRegime: state.regime?.regime
-              }
-            };
-            
-            try {
-              // Real-account execution when enabled + keys configured, otherwise paper
-              if (config.execution === 'REAL' && this.exchangeExecutor.isConfigured()) {
-                console.log(`MarketDataEngine: REAL order for ${symbol} ${signal.signal}`);
-                this.exchangeExecutor.setLeverage(symbol, config.leverage).catch((e) => console.error('setLeverage failed:', e.message));
-                const order = await this.exchangeExecutor.placeMarketOrder(symbol, intent.side, quantity);
-                const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
-                trade.orderId = order?.orderId ? String(order.orderId) : trade.orderId;
-                this.emitTrade(trade);
-              } else if (config.execution === 'REAL') {
-                console.warn(`MarketDataEngine: REAL mode selected but Binance keys not configured — falling back to PAPER for ${symbol}`);
-                const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
-                this.emitTrade(trade);
-              } else {
-                const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
-                this.emitTrade(trade);
-              }
-            } catch (err) {
-              console.error(`MarketDataEngine: Auto-Trading order execution failed for ${symbol}:`, err);
-            }
-          }
-        }
-      }
-    }
+    // NOTE: Auto-trade EXECUTION does NOT happen here. Opening trades on every
+    // tick caused the rapid open→close→reopen churn seen before. Entry is now
+    // decided once per discovery-pipeline cycle by allocateAutoTrades(), which
+    // respects maxOpenTrades and the FIFO re-entry queue. This method only
+    // scores + publishes signals.
   }
 
   public getSymbolState(symbol: string): AggregatedSymbolState | undefined {
@@ -972,6 +906,148 @@ export class MarketDataEngine {
 
   public getAllStates(): AggregatedSymbolState[] {
     return Array.from(this.symbolStates.values());
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // AUTO-TRADE ALLOCATOR
+  // Single, controlled entry point that runs once per discovery cycle.
+  // 1) Re-entry is FIFO: coins whose trade closed go to the END of the queue
+  //    and reopen only after full pipeline re-qualification AND after every
+  //    coin that closed before them has had its turn.
+  // 2) Any remaining free slots go to freshly-qualified coins by priority.
+  // This is the ONLY place that opens AUTO trades — never per-tick.
+  // ─────────────────────────────────────────────────────────────
+
+  private async tryOpenAutoTrade(
+    symbol: string,
+    state: AggregatedSymbolState,
+    signal: AggregatedSymbolState['signal']
+  ): Promise<boolean> {
+    const config = this.autoTradeConfig;
+    if (!signal || signal.signal === 'NEUTRAL') return false;
+
+    const lastPrice = state.lastTick?.price;
+    if (!lastPrice || lastPrice <= 0) return false;
+
+    // Smart-money filter: only enter setups that meet the minimum risk:reward
+    const minRR = config.minRiskReward || 1.5;
+    const rr = signal.riskRewardRatio || 0;
+    if (rr < minRR) {
+      console.log(`MarketDataEngine: Skipping ${symbol} — R:R ${rr.toFixed(2)} < ${minRR.toFixed(2)}`);
+      return false;
+    }
+
+    const usdSize = config.margin * config.leverage;
+    const quantity = parseFloat((usdSize / lastPrice).toFixed(4));
+    if (quantity <= 0) return false;
+
+    const intent: PaperOrderIntent = {
+      symbol,
+      side: signal.signal === 'BUY' ? 'BUY' : 'SELL',
+      type: 'MARKET',
+      quantity,
+      stopLoss: signal.stopLoss,
+      takeProfit: signal.takeProfit,
+      leverage: config.leverage,
+      context: {
+        reasonOfEntry: 'AUTO_TRADER_EXECUTION',
+        hunterScore: state.hunter?.hunterScore,
+        setupQuality: signal.setupQuality,
+        rsi: state.indicators?.rsiMultiTimeframe?.tf5m,
+        wmr: state.indicators?.williamsR200,
+        adx: state.indicators?.adx14?.adx,
+        emaTrend: state.indicators ? (state.indicators.ema20 > state.indicators.ema50 ? 'BULL' : 'BEAR') : 'NEUTRAL',
+        marketRegime: state.regime?.regime
+      }
+    };
+
+    try {
+      if (config.execution === 'REAL' && this.exchangeExecutor.isConfigured()) {
+        console.log(`MarketDataEngine: REAL order for ${symbol} ${signal.signal}`);
+        this.exchangeExecutor.setLeverage(symbol, config.leverage).catch((e) => console.error('setLeverage failed:', e.message));
+        const order = await this.exchangeExecutor.placeMarketOrder(symbol, intent.side, quantity);
+        const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
+        trade.orderId = order?.orderId ? String(order.orderId) : trade.orderId;
+        this.emitTrade(trade);
+      } else {
+        if (config.execution === 'REAL') {
+          console.warn(`MarketDataEngine: REAL mode selected but Binance keys not configured — falling back to PAPER for ${symbol}`);
+        }
+        const trade = this.paperEngine.executeOrder(intent, state.depth, lastPrice);
+        this.emitTrade(trade);
+      }
+      console.log(`MarketDataEngine: Auto-Trading triggered ${signal.signal} for ${symbol} Qty=${quantity} (Leverage=${config.leverage}x, R:R=${rr.toFixed(2)})`);
+      state.lifecycle = 'OPEN_TRADE';
+      return true;
+    } catch (err) {
+      console.error(`MarketDataEngine: Auto-Trading order execution failed for ${symbol}:`, err);
+      return false;
+    }
+  }
+
+  private async allocateAutoTrades(
+    discoveredSymbols: Set<string>,
+    finalSignals: PrioritizedCandidate[]
+  ): Promise<void> {
+    if (this.autoTradeConfig.mode !== 'AUTO') return;
+
+    const activePositions = this.paperEngine.getPositions();
+    let slots = this.autoTradeConfig.maxOpenTrades - activePositions.length;
+    if (slots <= 0) return;
+
+    const openSymbols = new Set(activePositions.map(p => p.symbol));
+    const cooldownMs = (this.autoTradeConfig.reentryCooldownMin || 0) * 60 * 1000;
+
+    // Drop queued coins that no longer exist in the discovery pool AND have no
+    // open position — they failed to re-qualify, so they leave the list.
+    this.reentryQueue = this.reentryQueue.filter(s => openSymbols.has(s) || discoveredSymbols.has(s));
+
+    // 1) FIFO re-entry pass — close-time order, one slot each.
+    for (const symbol of Array.from(this.reentryQueue)) {
+      if (slots <= 0) break;
+      if (openSymbols.has(symbol)) continue;
+
+      const state = this.symbolStates.get(symbol);
+      const signal = state?.signal;
+      if (!state || !signal || signal.signal === 'NEUTRAL') continue;
+
+      const lastExit = this.lastTradeExitAt.get(symbol) || 0;
+      if (cooldownMs > 0 && (Date.now() - lastExit) < cooldownMs) continue;
+
+      // Must have produced a fresh Stage 4 signal THIS cycle to re-enter.
+      if (!finalSignals.some(s => s.symbol === symbol)) continue;
+
+      const ok = await this.tryOpenAutoTrade(symbol, state, signal);
+      if (ok) {
+        slots--;
+        openSymbols.add(symbol);
+        this.reentryQueue = this.reentryQueue.filter(s => s !== symbol);
+        console.log(`MarketDataEngine: ${symbol} re-entered via FIFO queue → removed from re-entry list`);
+      }
+    }
+
+    // 2) Fresh-qualified coins fill remaining slots, highest priority first.
+    if (slots > 0) {
+      const ordered = finalSignals
+        .filter(s => !openSymbols.has(s.symbol) && !this.reentryQueue.includes(s.symbol))
+        .sort((a, b) => (b.compositeScore ?? 0) - (a.compositeScore ?? 0));
+
+      for (const cand of ordered) {
+        if (slots <= 0) break;
+        const state = this.symbolStates.get(cand.symbol);
+        const signal = state?.signal;
+        if (!state || !signal || signal.signal === 'NEUTRAL') continue;
+
+        const lastExit = this.lastTradeExitAt.get(cand.symbol) || 0;
+        if (cooldownMs > 0 && (Date.now() - lastExit) < cooldownMs) continue;
+
+        const ok = await this.tryOpenAutoTrade(cand.symbol, state, signal);
+        if (ok) {
+          slots--;
+          openSymbols.add(cand.symbol);
+        }
+      }
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1133,10 +1209,14 @@ export class MarketDataEngine {
 
       console.log(`MarketDataEngine: Dynamic Screener matched ${discovered.length} symbols (including majors).`);
 
-      // Prune symbolStates and candleHistory/tickHistory for untracked symbols
+      // Prune symbolStates and candleHistory/tickHistory for untracked symbols.
+      // Symbols with an OPEN position are NEVER pruned: their live feed must
+      // keep streaming so mark price, TP/SL and momentum monitoring stay fresh
+      // until the trade closes. This stops the open-trade card from flapping.
       const discoveredSymbols = new Set(discovered.map(c => c.symbol));
+      const openPositionSymbols = new Set(this.paperEngine.getPositions().map(p => p.symbol));
       for (const sym of this.symbolStates.keys()) {
-        if (!discoveredSymbols.has(sym)) {
+        if (!discoveredSymbols.has(sym) && !openPositionSymbols.has(sym)) {
           this.symbolStates.delete(sym);
           this.candleHistory.delete(sym);
           this.tickHistory.delete(sym);
@@ -1235,15 +1315,19 @@ export class MarketDataEngine {
         `Pipeline: Stage1=${discovered.length} | Stage2=${heatCandidates.length} | Signals=${finalSignals.length} | ${Date.now() - pipelineStart}ms`
       );
 
-      // WebSocket Promotion Layer: Only subscribe to Majors OR coins with Hunter Score >= 60 OR Focused symbol
+      // WebSocket Promotion Layer: Only subscribe to Majors OR coins with Hunter Score >= 60 OR Focused symbol.
+      // Symbols holding an OPEN position are ALWAYS kept subscribed so their
+      // mark price keeps flowing live — a position is never left on a dead feed.
       if (this.wsManager || this.spotWs) {
+        const openPositionSymbols = new Set(this.paperEngine.getPositions().map(p => p.symbol));
         const wsSymbols = discovered
           .filter(c => {
             const s = this.symbolStates.get(c.symbol);
             const score = s?.hunter?.hunterScore || 0;
             const isMajor = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'].includes(c.symbol);
             const isFocused = this.focusedSymbol && c.symbol === this.focusedSymbol.toUpperCase();
-            return score >= 60 || isMajor || isFocused;
+            const hasPosition = openPositionSymbols.has(c.symbol);
+            return score >= 60 || isMajor || isFocused || hasPosition;
           })
           .map(c => c.symbol);
         this.updateSymbolsForWebsockets(wsSymbols, this.focusedSymbol);
@@ -1255,34 +1339,21 @@ export class MarketDataEngine {
       }
 
       // ─────────────────────────────────────────────────────────────
-      // RE-QUALIFICATION PASS
-      // Any symbol that closed a trade is blocked until THIS fresh pipeline
-      // cycle re-processes it end-to-end: it must appear in Stage 1 discovery,
-      // pass Stage 2 heat confirmation, produce a Stage 4 signal, AND the
-      // minimum cooldown must have elapsed. Only then does it re-enter the
-      // execution list. Time does not matter — the process does.
+      // RE-ENTRY + AUTO-TRADE ALLOCATION PASS
+      // Runs ONCE per cycle. Opens trades only from here — never per tick.
+      // 1. Coins whose trade closed are in the FIFO reentryQueue. They reopen
+      //    only after full re-qualification AND after every earlier-closed
+      //    coin has had its turn (respecting maxOpenTrades).
+      // 2. Remaining free slots go to freshly-qualified coins by priority.
       // ─────────────────────────────────────────────────────────────
-      if (this.requalifyBlock.size > 0) {
-        const cooldownMs = (this.autoTradeConfig.reentryCooldownMin || 0) * 60 * 1000;
-        const stage1Symbols = new Set(discovered.map(c => c.symbol));
-        const heatConfirmed = new Set(heatCandidates.filter(c => c.heatConfirmed).map(c => c.symbol));
-        const freshSignalSymbols = new Set(finalSignals.map(s => s.symbol));
-
-        for (const [symbol, exitAt] of Array.from(this.requalifyBlock.entries())) {
-          const cooldownElapsed = cooldownMs <= 0 || (Date.now() - exitAt) >= cooldownMs;
-          if (cooldownElapsed && stage1Symbols.has(symbol) && heatConfirmed.has(symbol) && freshSignalSymbols.has(symbol)) {
-            this.requalifyBlock.delete(symbol);
-            const rState = this.symbolStates.get(symbol);
-            if (rState) rState.lifecycle = undefined;
-            console.log(`MarketDataEngine: ${symbol} RE-QUALIFIED through full pipeline (Stage1 + heat + fresh signal) → back on execution list`);
-          } else {
-            const why = !cooldownElapsed ? 'cooldown not elapsed'
-              : !stage1Symbols.has(symbol) ? 'missing from Stage1 discovery'
-                : !heatConfirmed.has(symbol) ? 'failed Stage2 heat confirmation'
-                  : 'no fresh Stage4 signal';
-            console.log(`MarketDataEngine: ${symbol} still blocked — re-qualification pending (${why})`);
-          }
+      try {
+        await this.allocateAutoTrades(discoveredSymbols, finalSignals);
+        const queued = this.reentryQueue.length;
+        if (queued > 0) {
+          console.log(`MarketDataEngine: Re-entry queue (FIFO): ${queued} waiting → [${this.reentryQueue.join(', ')}]`);
         }
+      } catch (allocErr: any) {
+        console.error('MarketDataEngine: Auto-trade allocation error:', allocErr.message);
       }
 
       // ─────────────────────────────────────────────────────────────
