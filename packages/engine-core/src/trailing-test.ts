@@ -69,4 +69,54 @@ engine.disableTrailing('TESTUSDT');
 pos = engine.getPositions().find(p => p.symbol === 'TESTUSDT')!;
 assert(pos.trailingStopActive === false && pos.trailingStop === undefined, 'trailing disabled, trail cleared');
 
+// --- Auto-configuration of trailing stop from R:R on new position ---
+// Entry $100, SL $99 (1% risk), TP $101.5 (1.5% reward) → R:R 1.5.
+// Standard scheme: arm after 1R, trail 0.5R behind peak, widened slightly for higher R:R.
+const rrIntent: PaperOrderIntent = {
+  symbol: 'RRUSDT',
+  side: 'BUY',
+  type: 'MARKET',
+  quantity: 1,
+  leverage: 5,
+  stopLoss: 99,
+  takeProfit: 101.5,
+  context: { reasonOfEntry: 'TEST', marketRegime: 'TRENDING_BULL' }
+};
+engine.executeOrder(rrIntent, null, 100);
+pos = engine.getPositions().find(p => p.symbol === 'RRUSDT')!;
+assert(pos.trailingStopActive === true, 'auto-trailing enabled on open with SL');
+assert(pos.trailingStopPct === 0.56, `auto-trail distance 0.5R widened for R:R 1.5 (got ${pos.trailingStopPct})`);
+assert(pos.trailActivationPct === 1, `auto-trail arms after 1R (got ${pos.trailActivationPct})`);
+assert(pos.peakPrice === 100 && pos.trailingStop === undefined, 'auto-trail starts disarmed at entry');
+
+// Wider R:R setup gets a wider trail so winners have room to run.
+const wideIntent: PaperOrderIntent = {
+  symbol: 'WIDEUSDT',
+  side: 'BUY',
+  type: 'MARKET',
+  quantity: 1,
+  leverage: 5,
+  stopLoss: 99,
+  takeProfit: 104, // R:R 4
+  context: { reasonOfEntry: 'TEST', marketRegime: 'TRENDING_BULL' }
+};
+engine.executeOrder(wideIntent, null, 100);
+pos = engine.getPositions().find(p => p.symbol === 'WIDEUSDT')!;
+assert(pos.trailingStopActive === true, 'auto-trailing on wide R:R setup');
+assert(pos.trailingStopPct! > 0.56, 'wider R:R yields wider trail distance');
+
+// No stop-loss → nothing to base R on → no auto-trailing.
+const noSlIntent: PaperOrderIntent = {
+  symbol: 'NOSLUSDT',
+  side: 'BUY',
+  type: 'MARKET',
+  quantity: 1,
+  leverage: 5,
+  takeProfit: 105,
+  context: { reasonOfEntry: 'TEST', marketRegime: 'TRENDING_BULL' }
+};
+engine.executeOrder(noSlIntent, null, 100);
+pos = engine.getPositions().find(p => p.symbol === 'NOSLUSDT')!;
+assert(pos.trailingStopActive !== true && pos.trailingStopPct === undefined, 'no auto-trail without a stop-loss');
+
 console.log('\n--- PaperTradingEngine Trailing Stop Test Suite Complete ---');

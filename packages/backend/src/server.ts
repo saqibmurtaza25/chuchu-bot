@@ -243,15 +243,20 @@ export function createServer(symbols: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT
   // ── Trade history CSV export ─────────────────────────────────
   app.get('/api/v1/history/csv', (req: Request, res: Response) => {
     const trades = dataEngine.paperEngine.getTradeHistory();
-    const header = ['timestamp', 'tradeId', 'symbol', 'side', 'fillPrice', 'quantity', 'notional', 'slippagePct', 'fee', 'fundingPaid', 'exitReason', 'netPnl', 'setupQuality', 'hunterScore', 'rsi', 'wmr', 'leverage'];
+    const header = ['timestamp', 'tradeId', 'symbol', 'side', 'fillPrice', 'openPrice', 'closePrice', 'openedAtUtc', 'closedAtUtc', 'quantity', 'notional', 'slippagePct', 'fee', 'fundingPaid', 'exitReason', 'netPnl', 'setupQuality', 'hunterScore', 'rsi', 'wmr', 'leverage'];
     const rows = trades.map((t) => {
       const ctx = t.context || {};
+      const isClose = t.pnl !== undefined;
       return [
         new Date(t.timestamp).toISOString(),
         t.tradeId,
         t.symbol,
         t.side,
         t.fillPrice,
+        t.openPrice ?? t.fillPrice,
+        isClose ? t.fillPrice : '',
+        t.openedAt ? new Date(t.openedAt).toISOString() : '',
+        isClose ? new Date(t.timestamp).toISOString() : '',
         t.quantity,
         (t.fillPrice * t.quantity).toFixed(4),
         t.slippagePct ?? 0,

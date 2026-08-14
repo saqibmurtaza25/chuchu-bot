@@ -218,6 +218,10 @@ export interface PaperTrade {
   context?: TradeContext;
   exitReason?: ExitReason;
   pnl?: number;
+  /** Entry (open) price of the round-trip — stamped on the closing order. */
+  openPrice?: number;
+  /** UTC open time of the round-trip — stamped on the closing order. */
+  openedAt?: number;
 }
 
 export interface PaperPosition {

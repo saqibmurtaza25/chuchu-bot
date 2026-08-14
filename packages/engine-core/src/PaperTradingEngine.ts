@@ -81,6 +81,47 @@ export class PaperTradingEngine {
     return pos;
   }
 
+  /**
+   * Auto-configures the trailing stop on a freshly opened position using the
+   * standard R:R (risk:reward) scheme:
+   *   R    = |entry − SL| as % of entry (the initial risk)
+   *   arm  = after +1R favorable move
+   *   trail = 0.5R behind the peak, widened slightly for higher R:R setups so
+   *           winners get room to run.
+   * Applies on every new position that carries a stop-loss (needs R to exist)
+   * while trailing is globally enabled. The user can still tweak or disable it
+   * per-position from the open-trade manager.
+   */
+  private autoConfigureTrailing(pos: PaperPosition): void {
+    if (!this.trailingStopEnabled) return;
+    const entry = pos.entryPrice;
+    const sl = pos.stopLoss;
+    if (entry <= 0 || sl === undefined || sl === entry) return;
+
+    const slPct = (Math.abs(sl - entry) / entry) * 100;
+    if (slPct < 0.05) return;
+
+    const tp = pos.takeProfit;
+    let trailDistance: number;
+    let activation: number;
+
+    if (tp !== undefined && tp !== entry) {
+      const tpPct = (Math.abs(tp - entry) / entry) * 100;
+      const rr = slPct > 0 ? tpPct / slPct : 1;
+      trailDistance = Math.min(2.0, Math.max(0.15, slPct * 0.5 * (0.75 + rr * 0.25)));
+      activation = Math.min(3.0, Math.max(0.1, slPct));
+    } else {
+      trailDistance = Math.min(2.0, Math.max(0.15, slPct * 0.5));
+      activation = Math.min(3.0, Math.max(0.1, slPct * 0.75));
+    }
+
+    pos.trailingStopActive = true;
+    pos.trailingStopPct = parseFloat(trailDistance.toFixed(2));
+    pos.trailActivationPct = parseFloat(activation.toFixed(2));
+    pos.peakPrice = pos.entryPrice;
+    pos.trailUpdatedAt = Date.now();
+  }
+
   public getBalance(): number {
     return this.balance;
   }
@@ -296,6 +337,7 @@ export class PaperTradingEngine {
         openedAt: Date.now(),
         context: intent.context
       };
+      this.autoConfigureTrailing(newPos);
       this.positions.set(trade.symbol, newPos);
       return;
     }
@@ -334,6 +376,11 @@ export class PaperTradingEngine {
       const netPnl = pnl - entryFeeShare - trade.fee - fundingShare;
       trade.pnl = parseFloat(netPnl.toFixed(4));
       trade.fundingPaid = parseFloat(fundingShare.toFixed(4));
+
+      // Staple the round-trip origin onto the closing order so the history
+      // table can show OPEN → CLOSE price and the UTC open→close window.
+      trade.openPrice = existing.entryPrice;
+      trade.openedAt = existing.openedAt;
 
       // Determine Exit Reason if not explicitly provided
       if (!trade.exitReason) {

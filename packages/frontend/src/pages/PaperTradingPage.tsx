@@ -2,16 +2,11 @@ import React, { useState } from 'react';
 import { useChuchuStore } from '../store/useChuchuStore';
 import {
   Terminal,
-  ArrowUpRight,
-  ArrowDownRight,
-  Layers,
   DollarSign,
   Activity,
   History,
-  Clock,
   XCircle,
   ShieldAlert,
-  Calendar,
   PieChart,
   Trophy,
   RefreshCw,
@@ -226,24 +221,17 @@ const TrailingStopManager: React.FC<{
 export const PaperTradingPage: React.FC = () => {
   const {
     states,
-    selectedSymbol,
-    setSelectedSymbol,
     paperBalance,
     positions,
     tradeHistory,
     paperStats,
-    submitOrder,
     closePosition,
     setTrailingStop,
-    timezone,
     resetTradeHistory,
     resetDemoBalance,
     serverUrl
   } = useChuchuStore();
 
-  const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
-  const [quantity, setQuantity] = useState<number>(1.0);
-  const [historyTab, setHistoryTab] = useState<'CARDS' | 'TABLE'>('CARDS');
   const [timeFilter, setTimeFilter] = useState<'TODAY' | 'YESTERDAY' | 'WEEK' | 'MONTH' | 'ALL'>('TODAY');
 
   const handleDownloadCsv = async () => {
@@ -261,17 +249,6 @@ export const PaperTradingPage: React.FC = () => {
     } catch (err) {
       console.error('CSV download failed:', err);
     }
-  };
-
-  const symbolList = Array.from(states.keys());
-  const activeState = states.get(selectedSymbol);
-  const markPrice = activeState?.lastTick?.price || 0;
-  const depth = activeState?.depth;
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (quantity <= 0) return;
-    submitOrder(selectedSymbol, side, quantity);
   };
 
   // Total unrealized PnL
@@ -316,7 +293,7 @@ export const PaperTradingPage: React.FC = () => {
             <span>INSTITUTIONAL PAPER EXECUTION TERMINAL</span>
           </h1>
           <p className="text-xs text-chuchu-muted mt-0.5 font-medium">
-            Simulated order execution against live Binance L2 orderbook depth with dynamic slippage &amp; fee model
+            Simulated order execution at live Binance prices with dynamic slippage &amp; fee model
           </p>
           <p className="text-[10px] text-chuchu-yellow/70 mt-0.5 font-bold">
             AUTO-SAVED — trade history, balance &amp; positions survive every backend restart. History is NEVER auto-cleared; it only changes when you press RESET HISTORY / RESET BALANCE.
@@ -377,148 +354,6 @@ export const PaperTradingPage: React.FC = () => {
               {totalUnrealizedPnL >= 0 ? `+$${totalUnrealizedPnL.toFixed(2)}` : `-$${Math.abs(totalUnrealizedPnL).toFixed(2)}`}
             </span>
           </div>
-        </div>
-      </div>
-
-      {/* Main Terminal Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Order Form Column */}
-        <div className="lg:col-span-4 glass-panel rounded-xl p-5 border border-chuchu-border space-y-5">
-          <div className="flex items-center justify-between pb-3 border-b border-chuchu-border">
-            <span className="text-sm font-bold text-chuchu-text">ORDER EXECUTION</span>
-            <select
-              value={selectedSymbol}
-              onChange={(e) => setSelectedSymbol(e.target.value)}
-              className="bg-chuchu-bg border border-chuchu-border text-chuchu-cyan px-3 py-1 rounded text-xs font-bold focus:outline-none"
-            >
-              {symbolList.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Side Toggle */}
-            <div className="grid grid-cols-2 gap-2 p-1 bg-chuchu-bg rounded border border-chuchu-border">
-              <button
-                type="button"
-                onClick={() => setSide('BUY')}
-                className={`py-2 rounded font-bold text-xs transition-all ${
-                  side === 'BUY' ? 'bg-emerald-500 text-black shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'text-chuchu-muted'
-                }`}
-              >
-                LONG / BUY
-              </button>
-              <button
-                type="button"
-                onClick={() => setSide('SELL')}
-                className={`py-2 rounded font-bold text-xs transition-all ${
-                  side === 'SELL' ? 'bg-rose-500 text-white shadow-[0_0_10px_rgba(244,63,94,0.3)]' : 'text-chuchu-muted'
-                }`}
-              >
-                SHORT / SELL
-              </button>
-            </div>
-
-            {/* Order Type Display */}
-            <div className="text-xs space-y-1">
-              <span className="text-chuchu-muted">ORDER TYPE:</span>
-              <div className="w-full p-2 bg-chuchu-bg rounded border border-chuchu-border text-chuchu-text font-bold">
-                MARKET (L2 DEPTH MATCHED)
-              </div>
-            </div>
-
-            {/* Price Display */}
-            <div className="text-xs space-y-1">
-              <span className="text-chuchu-muted">MARKET PRICE:</span>
-              <div className="w-full p-2 bg-chuchu-bg rounded border border-chuchu-border text-chuchu-cyan font-bold text-sm">
-                ${markPrice > 0 ? formatPrice(markPrice) : '---'}
-              </div>
-            </div>
-
-            {/* Quantity Input */}
-            <div className="text-xs space-y-1">
-              <span className="text-chuchu-muted">QUANTITY:</span>
-              <input
-                type="number"
-                step="0.1"
-                min="0.1"
-                value={quantity}
-                onChange={(e) => setQuantity(parseFloat(e.target.value) || 0)}
-                className="w-full p-2 bg-chuchu-bg border border-chuchu-border text-chuchu-text font-bold rounded focus:outline-none focus:border-chuchu-cyan"
-              />
-            </div>
-
-            {/* Order Cost Est */}
-            <div className="p-3 bg-chuchu-bg/60 rounded border border-chuchu-border/50 text-xs space-y-1">
-              <div className="flex justify-between text-chuchu-muted">
-                <span>EST NOTIONAL:</span>
-                <span className="text-chuchu-text font-bold">${formatPrice(markPrice * quantity)} USDT</span>
-              </div>
-              <div className="flex justify-between text-chuchu-muted">
-                <span>TAKER FEE (0.04%):</span>
-                <span className="text-chuchu-text font-bold">${(markPrice * quantity * 0.0004).toFixed(2)} USDT</span>
-              </div>
-            </div>
-
-            {/* Submit Button */}
-            <button
-              type="submit"
-              className={`w-full py-3 rounded font-bold text-xs flex items-center justify-center space-x-2 transition-all duration-150 ${
-                side === 'BUY'
-                  ? 'bg-emerald-500 text-black hover:bg-emerald-400 font-black'
-                  : 'bg-rose-500 text-white hover:bg-rose-400 font-black'
-              }`}
-            >
-              {side === 'BUY' ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
-              <span>SUBMIT PAPER {side} ORDER</span>
-            </button>
-          </form>
-        </div>
-
-        {/* Live Orderbook Ladder Column */}
-        <div className="lg:col-span-8 glass-panel rounded-xl p-5 border border-chuchu-border space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-chuchu-border">
-            <span className="text-sm font-bold text-chuchu-text flex items-center space-x-2">
-              <Layers className="w-4 h-4 text-chuchu-cyan" />
-              <span>LIVE L2 ORDERBOOK DEPTH ({selectedSymbol})</span>
-            </span>
-            <span className="text-xs text-chuchu-muted">100ms Streaming Snapshot</span>
-          </div>
-
-          {!depth ? (
-            <div className="py-12 text-center text-chuchu-muted text-xs">Loading orderbook depth snapshot...</div>
-          ) : (
-            <div className="grid grid-cols-2 gap-4 text-xs">
-              {/* Asks (Sells) */}
-              <div>
-                <div className="text-[10px] text-rose-400 font-bold mb-2 uppercase">ASK DEPTH (SELL ORDERS)</div>
-                <div className="space-y-1">
-                  {depth.asks.slice(0, 8).map((a, i) => (
-                    <div key={i} className="flex justify-between items-center bg-rose-500/10 p-1.5 rounded border border-rose-500/20">
-                      <span className="text-rose-400 font-bold">${formatPrice(a.price)}</span>
-                      <span className="text-chuchu-text font-semibold">{a.quantity.toFixed(3)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Bids (Buys) */}
-              <div>
-                <div className="text-[10px] text-emerald-400 font-bold mb-2 uppercase">BID DEPTH (BUY ORDERS)</div>
-                <div className="space-y-1">
-                  {depth.bids.slice(0, 8).map((b, i) => (
-                    <div key={i} className="flex justify-between items-center bg-emerald-500/10 p-1.5 rounded border border-emerald-500/20">
-                      <span className="text-emerald-400 font-bold">${formatPrice(b.price)}</span>
-                      <span className="text-chuchu-text font-semibold">{b.quantity.toFixed(3)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
@@ -642,7 +477,7 @@ export const PaperTradingPage: React.FC = () => {
         )}
       </div>
 
-      {/* BINANCE-STYLE TRADE HISTORY RECORD */}
+      {/* DAILY PROFIT & LOSS TRADE HISTORY */}
       <div className="glass-panel rounded-xl p-5 border border-chuchu-border/80 shadow-lg space-y-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-chuchu-border pb-3">
           <div className="flex items-center space-x-2">
@@ -673,35 +508,14 @@ export const PaperTradingPage: React.FC = () => {
 
           <div className="flex items-center space-x-2 text-xs border-l border-chuchu-border pl-3">
             <button
-              onClick={() => setHistoryTab('CARDS')}
-              className={`px-3 py-1 rounded-md font-bold transition-all ${
-                historyTab === 'CARDS'
-                  ? 'bg-chuchu-cyan text-black shadow-[0_0_10px_rgba(0,229,255,0.3)]'
-                  : 'bg-chuchu-card text-chuchu-muted hover:text-chuchu-text border border-chuchu-border'
-              }`}
+              onClick={handleDownloadCsv}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 text-[10px] font-black transition-all"
+              title="Download full trade history as CSV"
             >
-              BINANCE CARDS
-            </button>
-            <button
-              onClick={() => setHistoryTab('TABLE')}
-              className={`px-3 py-1 rounded-md font-bold transition-all ${
-                historyTab === 'TABLE'
-                  ? 'bg-chuchu-cyan text-black shadow-[0_0_10px_rgba(0,229,255,0.3)]'
-                  : 'bg-chuchu-card text-chuchu-muted hover:text-chuchu-text border border-chuchu-border'
-              }`}
-            >
-              COMPACT TABLE
+              <Download className="w-3.5 h-3.5" />
+              <span>DOWNLOAD CSV</span>
             </button>
           </div>
-
-          <button
-            onClick={handleDownloadCsv}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 text-[10px] font-black transition-all"
-            title="Download full trade history as CSV"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>DOWNLOAD CSV</span>
-          </button>
         </div>
 
         {/* KPI Banner */}
@@ -781,126 +595,24 @@ export const PaperTradingPage: React.FC = () => {
           <div className="py-8 text-center text-chuchu-muted text-xs">
             No trades found for this time period.
           </div>
-        ) : historyTab === 'CARDS' ? (
-          /* BINANCE CARD VIEW */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredHistory.map((trade) => {
-              const isBuy = trade.side === 'BUY';
-              const notional = trade.fillPrice * trade.quantity;
-              const dateStr = formatTime(trade.timestamp, timezone);
-
-              return (
-                <div
-                  key={trade.tradeId}
-                  className="bg-chuchu-card/90 p-4 rounded-xl border border-chuchu-border/80 hover:border-chuchu-cyan/40 transition-all shadow-md space-y-3 font-sans"
-                >
-                  {/* Card Top: Symbol & Side Badge */}
-                  <div className="flex items-center justify-between pb-2 border-b border-chuchu-border/50">
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-black text-sm text-chuchu-text tracking-wide">{trade.symbol}</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-chuchu-panel text-chuchu-muted font-bold">BINANCE PERP</span>
-                      </div>
-                      <div className="text-[10px] text-chuchu-muted flex items-center space-x-1 mt-0.5">
-                        <Clock className="w-3 h-3 text-chuchu-cyan" />
-                        <span>{dateStr}</span>
-                      </div>
-                    </div>
-
-                    <span
-                      className={`px-2.5 py-1 rounded-md text-xs font-black tracking-wide border shadow-sm ${
-                        isBuy
-                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
-                          : 'bg-rose-500/20 text-rose-400 border-rose-500/40 shadow-[0_0_8px_rgba(244,63,94,0.2)]'
-                      }`}
-                    >
-                      {isBuy ? 'LONG / BUY' : 'SHORT / SELL'}
-                    </span>
-                  </div>
-
-                  {/* Binance Trade Metrics */}
-                  <div className="grid grid-cols-2 gap-2 text-xs num-font pt-1">
-                    <div className="bg-chuchu-bg/80 p-2 rounded border border-chuchu-border/40">
-                      <div className="text-[10px] text-chuchu-muted font-sans">EXECUTED PRICE</div>
-                      <div className="font-bold text-chuchu-cyan text-sm">${formatPrice(trade.fillPrice)}</div>
-                    </div>
-
-                    <div className="bg-chuchu-bg/80 p-2 rounded border border-chuchu-border/40">
-                      <div className="text-[10px] text-chuchu-muted font-sans">TRADE SIZE / NOTIONAL</div>
-                      <div className="font-bold text-chuchu-text text-sm">{trade.quantity} <span className="text-[10px] text-chuchu-muted">(${notional.toFixed(2)})</span></div>
-                    </div>
-
-                    <div className="bg-chuchu-bg/80 p-2 rounded border border-chuchu-border/40">
-                      <div className="text-[10px] text-chuchu-muted font-sans">TRADING FEE (VIP 0)</div>
-                      <div className="font-semibold text-amber-400">${trade.fee.toFixed(4)} USDT</div>
-                    </div>
-
-                    <div className="bg-chuchu-bg/80 p-2 rounded border border-chuchu-border/40">
-                      <div className="text-[10px] text-chuchu-muted font-sans">SLIPPAGE MATCH</div>
-                      <div className="font-semibold text-chuchu-text">{trade.slippagePct.toFixed(3)}%</div>
-                    </div>
-
-                    {trade.pnl !== undefined && (
-                      <div className="bg-chuchu-bg/80 p-2 rounded border border-chuchu-border/40 col-span-2">
-                        <div className="text-[10px] text-chuchu-muted font-sans">REALIZED P&L</div>
-                        <div className={`font-black text-sm ${trade.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {trade.pnl >= 0 ? `+$${trade.pnl.toFixed(4)}` : `-$${Math.abs(trade.pnl).toFixed(4)}`} USDT
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Trade Context & Exit Reason */}
-                  {(trade.context || trade.exitReason) && (
-                    <div className="pt-2 mt-2 border-t border-chuchu-border/40 text-[10px] space-y-1 bg-chuchu-bg/40 p-2 rounded">
-                      {trade.context?.reasonOfEntry && (
-                        <div className="flex justify-between">
-                          <span className="text-chuchu-muted">ENTRY:</span>
-                          <span className="text-chuchu-cyan font-bold">{trade.context.reasonOfEntry} (Score: {trade.context.setupQuality?.toFixed(0) || trade.context.hunterScore})</span>
-                        </div>
-                      )}
-                      {trade.context?.marketRegime && (
-                        <div className="flex justify-between">
-                          <span className="text-chuchu-muted">REGIME:</span>
-                          <span className="text-chuchu-text font-bold">{trade.context.marketRegime} (ADX: {trade.context.adx?.toFixed(1)})</span>
-                        </div>
-                      )}
-                      {trade.exitReason && (
-                        <div className="flex justify-between">
-                          <span className="text-chuchu-muted">EXIT:</span>
-                          <span className={`font-bold ${
-                            trade.exitReason === 'TAKE_PROFIT' || trade.exitReason === 'MOMENTUM_PROFIT_BOOK'
-                              ? 'text-emerald-400'
-                              : trade.exitReason === 'STOP_LOSS' || trade.exitReason === 'LIQUIDATION' || trade.exitReason === 'MOMENTUM_CUT_LOSS'
-                                ? 'text-rose-400'
-                                : trade.exitReason === 'TRAILING_STOP'
-                                  ? 'text-cyan-400'
-                                  : 'text-amber-400'
-                          }`}>
-                            {trade.exitReason} {trade.pnl ? `(${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)})` : ''}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
         ) : (
-          /* COMPACT TABLE VIEW */
+          /* FULL TRADE HISTORY TABLE */
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-chuchu-card text-chuchu-muted uppercase text-[10px] border-b border-chuchu-border">
-                  <th className="py-2.5 px-3">TIME & DATE</th>
+                  <th className="py-2.5 px-3">OPEN → CLOSE (UTC)</th>
                   <th className="py-2.5 px-3">SYMBOL</th>
                   <th className="py-2.5 px-3">SIDE</th>
-                  <th className="py-2.5 px-3">FILL PRICE</th>
+                  <th className="py-2.5 px-3">OPEN PRICE</th>
+                  <th className="py-2.5 px-3">CLOSE PRICE</th>
                   <th className="py-2.5 px-3">QUANTITY</th>
                   <th className="py-2.5 px-3">NOTIONAL (USDT)</th>
                   <th className="py-2.5 px-3">FEE (USDT)</th>
                   <th className="py-2.5 px-3">SLIPPAGE</th>
+                  <th className="py-2.5 px-3">ENTRY REASON</th>
+                  <th className="py-2.5 px-3">REGIME</th>
+                  <th className="py-2.5 px-3">FUNDING (USDT)</th>
                   <th className="py-2.5 px-3">EXIT REASON</th>
                   <th className="py-2.5 px-3">REALIZED PNL</th>
                 </tr>
@@ -909,11 +621,27 @@ export const PaperTradingPage: React.FC = () => {
                 {filteredHistory.map((trade) => {
                   const isBuy = trade.side === 'BUY';
                   const notional = trade.fillPrice * trade.quantity;
-                  const dateStr = formatTime(trade.timestamp, timezone);
+                  const isClose = trade.pnl !== undefined;
+                  const openPrice = trade.openPrice ?? trade.fillPrice;
+                  const openTime = trade.openedAt ?? trade.timestamp;
+                  const holdMs = isClose ? trade.timestamp - openTime : 0;
+                  const holdStr = isClose && holdMs >= 0
+                    ? `${Math.floor(holdMs / 3600000)}h ${Math.floor((holdMs % 3600000) / 60000)}m`
+                    : '';
 
                   return (
                     <tr key={trade.tradeId} className="hover:bg-chuchu-panel/50 transition-colors">
-                      <td className="py-2.5 px-3 text-chuchu-muted font-sans text-[11px]">{dateStr}</td>
+                      <td className="py-2.5 px-3 text-chuchu-muted font-sans text-[10px]">
+                        {isClose ? (
+                          <div className="space-y-0.5">
+                            <div>{formatTime(openTime, 'UTC')}</div>
+                            <div>→ {formatTime(trade.timestamp, 'UTC')}</div>
+                            <div className="text-chuchu-cyan font-bold">{holdStr} HOLD</div>
+                          </div>
+                        ) : (
+                          <span>{formatTime(trade.timestamp, 'UTC')}</span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-3 font-bold">{trade.symbol}</td>
                       <td className="py-2.5 px-3">
                         <span
@@ -926,11 +654,29 @@ export const PaperTradingPage: React.FC = () => {
                           {isBuy ? 'BUY' : 'SELL'}
                         </span>
                       </td>
-                      <td className="py-2.5 px-3 font-bold text-chuchu-cyan">${formatPrice(trade.fillPrice)}</td>
+                      <td className="py-2.5 px-3 font-bold text-chuchu-text">${formatPrice(openPrice)}</td>
+                      <td className="py-2.5 px-3 font-bold text-chuchu-cyan">
+                        {isClose ? `$${formatPrice(trade.fillPrice)}` : <span className="text-chuchu-muted">—</span>}
+                      </td>
                       <td className="py-2.5 px-3 font-semibold">{trade.quantity}</td>
                       <td className="py-2.5 px-3">${notional.toFixed(2)}</td>
                       <td className="py-2.5 px-3 text-amber-400">${trade.fee.toFixed(4)}</td>
                       <td className="py-2.5 px-3">{trade.slippagePct.toFixed(3)}%</td>
+                      <td className="py-2.5 px-3 text-chuchu-cyan font-sans text-[11px]">
+                        {trade.context?.reasonOfEntry ? trade.context.reasonOfEntry : <span className="text-chuchu-muted">—</span>}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans text-[11px]">
+                        {trade.context?.marketRegime ? trade.context.marketRegime : <span className="text-chuchu-muted">—</span>}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        {trade.fundingPaid !== undefined && trade.fundingPaid !== 0 ? (
+                          <span className={trade.fundingPaid > 0 ? 'text-rose-400' : 'text-emerald-400'}>
+                            {trade.fundingPaid > 0 ? '+' : ''}{trade.fundingPaid.toFixed(4)}
+                          </span>
+                        ) : (
+                          <span className="text-chuchu-muted">—</span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-3">
                         {trade.exitReason ? (
                           <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${
