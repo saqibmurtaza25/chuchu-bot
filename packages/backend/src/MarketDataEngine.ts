@@ -1383,10 +1383,15 @@ export class MarketDataEngine {
         console.error('MarketDataEngine: Reversal intelligence pass error:', reversalErr.message);
       }
 
-      // Calculate dynamic next interval. 30s default reduces REST load ~3x;
-      // tighten to 15s only when paper positions are open so TP/SL stays fresh.
+      // Dynamic next interval tuned for quick Godzilla-style momentum trades:
+      //   - positions open      -> 10s (SL/TP/trailing must stay fresh)
+      //   - free slots in AUTO  -> 15s (hunt momentum fast, don't miss the move)
+      //   - otherwise (scanning)-> 30s (rests the REST budget)
       const activePositions = this.paperEngine.getPositions();
-      let nextInterval = activePositions.length > 0 ? 15000 : 30000;
+      const slotsFree = (this.autoTradeConfig.maxOpenTrades || 1) - activePositions.length > 0;
+      let nextInterval = 30000;
+      if (activePositions.length > 0) nextInterval = 10000;
+      else if (slotsFree && this.autoTradeConfig.mode === 'AUTO') nextInterval = 15000;
 
       console.log(`MarketDataEngine: Next discovery in ${nextInterval / 1000}s | Positions=${activePositions.length} | HeatCandidates=${heatCandidates.length}`);
       this.discoveryTimer = setTimeout(() => this.runDiscoveryPipeline(), nextInterval);

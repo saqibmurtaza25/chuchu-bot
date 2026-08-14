@@ -105,7 +105,8 @@ pos = engine.getPositions().find(p => p.symbol === 'WIDEUSDT')!;
 assert(pos.trailingStopActive === true, 'auto-trailing on wide R:R setup');
 assert(pos.trailingStopPct! > 0.56, 'wider R:R yields wider trail distance');
 
-// No stop-loss → nothing to base R on → no auto-trailing.
+// No stop-loss given → the SL-by-default guard still inserts one (0.5%), so
+// the R:R auto-trail is configured on every trade.
 const noSlIntent: PaperOrderIntent = {
   symbol: 'NOSLUSDT',
   side: 'BUY',
@@ -117,6 +118,33 @@ const noSlIntent: PaperOrderIntent = {
 };
 engine.executeOrder(noSlIntent, null, 100);
 pos = engine.getPositions().find(p => p.symbol === 'NOSLUSDT')!;
-assert(pos.trailingStopActive !== true && pos.trailingStopPct === undefined, 'no auto-trail without a stop-loss');
+assert(pos.stopLoss !== undefined, 'default SL inserted when signal omitted it');
+assert(pos.trailingStopActive === true, 'auto-trail configured off the guaranteed SL');
+assert(pos.trailingStopPct === 0.81, `auto-trail 0.5R widened for R:R 10 (got ${pos.trailingStopPct})`);
+
+// --- Stop-loss is guaranteed on EVERY trade by default ---
+// Missing SL -> default 0.5% stop mirrored by side.
+engine.executeOrder(
+  { symbol: 'GUARDUSDT', side: 'BUY', type: 'MARKET', quantity: 1, leverage: 5, takeProfit: 101, context: { reasonOfEntry: 'TEST', marketRegime: 'TRENDING_BULL' } },
+  null, 100
+);
+pos = engine.getPositions().find(p => p.symbol === 'GUARDUSDT')!;
+assert(pos.stopLoss !== undefined && Math.abs(pos.stopLoss - 99.5) < 0.01, `default SL applied when missing (got ${pos.stopLoss})`);
+
+// Razor-thin SL (0.05%) is widened to the 0.3% minimum so noise can't stop it.
+engine.executeOrder(
+  { symbol: 'THINUSDT', side: 'BUY', type: 'MARKET', quantity: 1, leverage: 5, stopLoss: 99.95, takeProfit: 101, context: { reasonOfEntry: 'TEST', marketRegime: 'TRENDING_BULL' } },
+  null, 100
+);
+pos = engine.getPositions().find(p => p.symbol === 'THINUSDT')!;
+assert(pos.stopLoss !== undefined && Math.abs(pos.stopLoss - 99.7) < 0.01, `razor-thin SL widened to 0.3% minimum (got ${pos.stopLoss})`);
+
+// Wide SL untouched.
+engine.executeOrder(
+  { symbol: 'SLWIDEUSDT', side: 'BUY', type: 'MARKET', quantity: 1, leverage: 5, stopLoss: 98, takeProfit: 104, context: { reasonOfEntry: 'TEST', marketRegime: 'TRENDING_BULL' } },
+  null, 100
+);
+pos = engine.getPositions().find(p => p.symbol === 'SLWIDEUSDT')!;
+assert(Math.abs(pos.stopLoss! - 98) < 0.01, 'legitimate wide SL left untouched');
 
 console.log('\n--- PaperTradingEngine Trailing Stop Test Suite Complete ---');

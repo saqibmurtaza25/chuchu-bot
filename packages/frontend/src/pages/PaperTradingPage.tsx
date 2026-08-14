@@ -14,7 +14,7 @@ import {
   MoveRight,
   Power
 } from 'lucide-react';
-import { formatPrice, formatTime, formatLatencyDelay } from '../utils/formatting';
+import { formatPrice, formatTime, formatLatencyDelay, formatUtcDate, formatUtcTime, formatHoldDuration } from '../utils/formatting';
 import { PaperPosition } from '@chuchu/shared';
 
 const StatBox: React.FC<{ label: string; value: string; accent: string }> = ({ label, value, accent }) => (
@@ -625,18 +625,19 @@ export const PaperTradingPage: React.FC = () => {
                   const openPrice = trade.openPrice ?? trade.fillPrice;
                   const openTime = trade.openedAt ?? trade.timestamp;
                   const holdMs = isClose ? trade.timestamp - openTime : 0;
-                  const holdStr = isClose && holdMs >= 0
-                    ? `${Math.floor(holdMs / 3600000)}h ${Math.floor((holdMs % 3600000) / 60000)}m`
-                    : '';
 
                   return (
                     <tr key={trade.tradeId} className="hover:bg-chuchu-panel/50 transition-colors">
-                      <td className="py-2.5 px-3 text-chuchu-muted font-sans text-[10px]">
+                      <td className="py-2.5 px-3 text-chuchu-muted font-sans text-[10px] whitespace-nowrap">
                         {isClose ? (
-                          <div className="space-y-0.5">
-                            <div>{formatTime(openTime, 'UTC')}</div>
-                            <div>→ {formatTime(trade.timestamp, 'UTC')}</div>
-                            <div className="text-chuchu-cyan font-bold">{holdStr} HOLD</div>
+                          <div className="leading-tight">
+                            <div className="text-chuchu-muted">{formatUtcDate(openTime)}</div>
+                            <div className="flex items-center gap-1">
+                              <span>{formatUtcTime(openTime)}</span>
+                              <span className="text-chuchu-cyan">→</span>
+                              <span>{formatUtcTime(trade.timestamp)}</span>
+                              <span className="text-chuchu-cyan font-bold">UTC · {formatHoldDuration(holdMs)}</span>
+                            </div>
                           </div>
                         ) : (
                           <span>{formatTime(trade.timestamp, 'UTC')}</span>

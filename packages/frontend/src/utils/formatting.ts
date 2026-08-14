@@ -74,6 +74,22 @@ export const formatTime = (timestamp: number, timezone: TimezoneMode): string =>
   }
 };
 
+/** Compact UTC date only, e.g. "2026-08-14". */
+export const formatUtcDate = (timestamp: number): string => {
+  return new Date(timestamp).toISOString().slice(0, 10);
+};
+
+/** Compact UTC clock time only, e.g. "05:47:07". */
+export const formatUtcTime = (timestamp: number): string => {
+  return new Date(timestamp).toISOString().slice(11, 19);
+};
+
+/** Compact hold duration, e.g. "3h 43m". */
+export const formatHoldDuration = (ms: number): string => {
+  if (!isFinite(ms) || ms < 0) return '';
+  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+};
+
 /**
  * Formats a USD value in compact form with an explicit sign:
  *   >= $1M -> "+$3.2M"   <-$1M -> "-$3.2M"

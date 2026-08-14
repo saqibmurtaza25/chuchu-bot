@@ -162,6 +162,27 @@ export class PaperTradingEngine {
   }
 
   /**
+   * Reconstructs the round-trip origin (entry price + open time) on closing
+   * records that were persisted before those fields were recorded. Scans the
+   * history in chronological order: each entry order seeds the symbol's open
+   * state, and each close without an origin picks it up. Safe to run any time.
+   */
+  public backfillRoundTripOrigins(): void {
+    const openBySymbol = new Map<string, { price: number; openedAt: number }>();
+    for (const trade of this.trades) {
+      if (trade.pnl === undefined) {
+        openBySymbol.set(trade.symbol, { price: trade.fillPrice, openedAt: trade.timestamp });
+      } else if (trade.openPrice === undefined || trade.openedAt === undefined) {
+        const origin = openBySymbol.get(trade.symbol);
+        if (origin) {
+          trade.openPrice = origin.price;
+          trade.openedAt = origin.openedAt;
+        }
+      }
+    }
+  }
+
+  /**
    * Full engine state snapshot — used to persist paper balance, open positions
    * and full trade history to disk so nothing resets on restart.
    */
@@ -187,6 +208,7 @@ export class PaperTradingEngine {
         if (p && p.symbol) this.positions.set(p.symbol, p);
       }
     }
+    this.backfillRoundTripOrigins();
   }
 
   /**
@@ -318,19 +340,40 @@ export class PaperTradingEngine {
     if (!existing) {
       // Open new position
       const leverage = intent.leverage || 1;
+      const isLong = trade.side === 'BUY';
+
+      // EVERY trade gets a stop-loss by default. Signals normally provide one,
+      // but this guarantees it regardless of entry path:
+      //   - missing/degenerate SL  -> default 0.5% stop (side-mirrored)
+      //   - razor-thin ATR stop    -> widened to a 0.3% minimum so market noise
+      //     cannot stop the trade out (the -$11 "unfair" losses came from
+      //     positions that either had no SL or an ATR stop thinner than noise).
+      const DEFAULT_SL_PCT = 0.5;
+      const MIN_SL_PCT = 0.3;
+      let stopLoss = intent.stopLoss;
+      if (stopLoss === undefined || !isFinite(stopLoss) || stopLoss === trade.fillPrice) {
+        stopLoss = trade.fillPrice * (1 + (isLong ? -1 : 1) * (DEFAULT_SL_PCT / 100));
+      } else {
+        const distPct = (Math.abs(stopLoss - trade.fillPrice) / trade.fillPrice) * 100;
+        if (distPct < MIN_SL_PCT) {
+          stopLoss = trade.fillPrice * (1 + (isLong ? -1 : 1) * (MIN_SL_PCT / 100));
+        }
+      }
+      stopLoss = parseFloat(stopLoss.toFixed(4));
+
       const newPos: PaperPosition = {
         symbol: trade.symbol,
-        side: trade.side === 'BUY' ? 'LONG' : 'SHORT',
+        side: isLong ? 'LONG' : 'SHORT',
         quantity: trade.quantity,
         entryPrice: trade.fillPrice,
         markPrice: trade.fillPrice,
         unrealizedPnL: 0,
         realizedPnL: 0,
         margin: (trade.fillPrice * trade.quantity) / leverage,
-        stopLoss: intent.stopLoss,
+        stopLoss,
         takeProfit: intent.takeProfit,
         leverage,
-        liquidationPrice: this.calculateLiquidationPrice(trade.side === 'BUY' ? 'LONG' : 'SHORT', trade.fillPrice, leverage),
+        liquidationPrice: this.calculateLiquidationPrice(isLong ? 'LONG' : 'SHORT', trade.fillPrice, leverage),
         fundingPaid: 0,
         entryFee: trade.fee,
         exitFee: 0,
