@@ -434,6 +434,12 @@ export const PaperTradingPage: React.FC = () => {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-[11px] bg-chuchu-bg/60 p-2 rounded border border-chuchu-border/40">
+                      <div className="col-span-2">
+                        <div className="text-chuchu-muted text-[10px]">TRADE OPENED AT (UTC)</div>
+                        <div className="font-bold text-chuchu-yellow">
+                          {pos.openedAt ? `${formatUtcDate(pos.openedAt)} ${formatUtcTime(pos.openedAt)} UTC` : '---'}
+                        </div>
+                      </div>
                       <div>
                         <div className="text-chuchu-muted text-[10px]">ENTRY PRICE</div>
                         <div className="font-bold text-chuchu-text">${formatPrice(pos.entryPrice)}</div>
